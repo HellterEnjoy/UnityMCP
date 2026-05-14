@@ -198,6 +198,12 @@ namespace CodexUnityMcp
                     return InspectGameObject(query);
                 case "/scene/set-transform":
                     return SetTransform(query);
+                case "/scene/create-gameobject":
+                    return CreateGameObject(query);
+                case "/scene/delete-gameobject":
+                    return DeleteGameObject(query);
+                case "/scene/duplicate-gameobject":
+                    return DuplicateGameObject(query);
                 case "/console":
                     return ReadConsole(query);
                 case "/screenshot":
@@ -427,6 +433,102 @@ namespace CodexUnityMcp
             EditorSceneManager.MarkSceneDirty(go.scene);
 
             return Ok(GameObjectDetails(go, false));
+        }
+
+        private static Dictionary<string, object> CreateGameObject(Dictionary<string, string> query)
+        {
+            var name = Get(query, "name", "GameObject");
+            var primitiveType = Get(query, "primitiveType", "empty");
+            var parent = ResolveParentGameObject(query);
+            if (HasParentQuery(query) && parent == null)
+            {
+                return Fail("parent_not_found", "Parent GameObject not found");
+            }
+
+            GameObject go;
+            if (string.Equals(primitiveType, "empty", StringComparison.OrdinalIgnoreCase))
+            {
+                go = new GameObject(name);
+            }
+            else if (TryPrimitiveType(primitiveType, out var primitive))
+            {
+                go = GameObject.CreatePrimitive(primitive);
+                go.name = name;
+            }
+            else
+            {
+                return Fail("invalid_primitive_type", "primitiveType must be one of empty, cube, sphere, capsule, cylinder, plane, or quad");
+            }
+
+            Undo.RegisterCreatedObjectUndo(go, "Codex MCP Create GameObject");
+
+            if (parent != null)
+            {
+                Undo.SetTransformParent(go.transform, parent.transform, "Codex MCP Set Parent");
+            }
+
+            ApplyOptionalTransform(go, query);
+            Selection.activeGameObject = go;
+            EditorSceneManager.MarkSceneDirty(go.scene);
+
+            return Ok(GameObjectDetails(go, false));
+        }
+
+        private static Dictionary<string, object> DeleteGameObject(Dictionary<string, string> query)
+        {
+            var go = ResolveGameObject(query);
+            if (go == null)
+            {
+                return Fail("not_found", "GameObject not found");
+            }
+
+            var scene = go.scene;
+            var summary = GameObjectSummary(go);
+            Undo.DestroyObjectImmediate(go);
+
+            if (scene.IsValid())
+            {
+                EditorSceneManager.MarkSceneDirty(scene);
+            }
+
+            return Ok(new Dictionary<string, object>
+            {
+                { "deleted", summary }
+            });
+        }
+
+        private static Dictionary<string, object> DuplicateGameObject(Dictionary<string, string> query)
+        {
+            var source = ResolveGameObject(query);
+            if (source == null)
+            {
+                return Fail("not_found", "GameObject not found");
+            }
+
+            var parent = ResolveParentGameObject(query);
+            if (HasParentQuery(query) && parent == null)
+            {
+                return Fail("parent_not_found", "Parent GameObject not found");
+            }
+
+            var duplicate = Object.Instantiate(source);
+            duplicate.name = Get(query, "newName", $"{source.name} Copy");
+            Undo.RegisterCreatedObjectUndo(duplicate, "Codex MCP Duplicate GameObject");
+
+            if (parent != null)
+            {
+                Undo.SetTransformParent(duplicate.transform, parent.transform, "Codex MCP Set Parent");
+            }
+            else if (source.transform.parent != null)
+            {
+                Undo.SetTransformParent(duplicate.transform, source.transform.parent, "Codex MCP Set Parent");
+            }
+
+            ApplyOptionalTransform(duplicate, query);
+            Selection.activeGameObject = duplicate;
+            EditorSceneManager.MarkSceneDirty(duplicate.scene);
+
+            return Ok(GameObjectDetails(duplicate, false));
         }
 
         private static Dictionary<string, object> ReadConsole(Dictionary<string, string> query)
@@ -790,6 +892,81 @@ namespace CodexUnityMcp
             }
 
             return null;
+        }
+
+        private static GameObject ResolveParentGameObject(Dictionary<string, string> query)
+        {
+            var parentQuery = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            if (query.TryGetValue("parentId", out var parentId))
+            {
+                parentQuery["id"] = parentId;
+            }
+
+            if (query.TryGetValue("parentPath", out var parentPath))
+            {
+                parentQuery["path"] = parentPath;
+            }
+
+            if (query.TryGetValue("parentName", out var parentName))
+            {
+                parentQuery["name"] = parentName;
+            }
+
+            return parentQuery.Count == 0 ? null : ResolveGameObject(parentQuery);
+        }
+
+        private static bool HasParentQuery(Dictionary<string, string> query)
+        {
+            return query.ContainsKey("parentId") || query.ContainsKey("parentPath") || query.ContainsKey("parentName");
+        }
+
+        private static void ApplyOptionalTransform(GameObject go, Dictionary<string, string> query)
+        {
+            if (TryVector3(query, "position", out var position))
+            {
+                go.transform.position = position;
+            }
+
+            if (TryVector3(query, "rotation", out var rotation))
+            {
+                go.transform.eulerAngles = rotation;
+            }
+
+            if (TryVector3(query, "scale", out var scale))
+            {
+                go.transform.localScale = scale;
+            }
+
+            EditorUtility.SetDirty(go.transform);
+        }
+
+        private static bool TryPrimitiveType(string value, out PrimitiveType primitive)
+        {
+            switch ((value ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "cube":
+                    primitive = PrimitiveType.Cube;
+                    return true;
+                case "sphere":
+                    primitive = PrimitiveType.Sphere;
+                    return true;
+                case "capsule":
+                    primitive = PrimitiveType.Capsule;
+                    return true;
+                case "cylinder":
+                    primitive = PrimitiveType.Cylinder;
+                    return true;
+                case "plane":
+                    primitive = PrimitiveType.Plane;
+                    return true;
+                case "quad":
+                    primitive = PrimitiveType.Quad;
+                    return true;
+                default:
+                    primitive = default;
+                    return false;
+            }
         }
 
         private static Dictionary<string, object> GameObjectSummary(GameObject go)

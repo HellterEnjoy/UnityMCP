@@ -136,6 +136,104 @@ def set_transform(
 
 
 @mcp.tool()
+def create_gameobject(
+    name: str = "GameObject",
+    primitive_type: str = "empty",
+    parent_instance_id: int | None = None,
+    parent_name: str | None = None,
+    parent_path: str | None = None,
+    position: list[float] | None = None,
+    rotation: list[float] | None = None,
+    scale: list[float] | None = None,
+) -> str:
+    """Create a GameObject in the active scene.
+
+    Args:
+        name: Name for the new GameObject.
+        primitive_type: One of empty, cube, sphere, capsule, cylinder, plane, or quad.
+        parent_instance_id: Optional parent Unity instance id.
+        parent_name: Optional exact parent GameObject name.
+        parent_path: Optional parent hierarchy path.
+        position: Optional [x, y, z] world position.
+        rotation: Optional [x, y, z] world Euler angles.
+        scale: Optional [x, y, z] local scale.
+    """
+    return pretty(
+        client.get(
+            "/scene/create-gameobject",
+            name=name,
+            primitiveType=primitive_type,
+            parentId=parent_instance_id,
+            parentName=parent_name,
+            parentPath=parent_path,
+            position=position,
+            rotation=rotation,
+            scale=scale,
+        )
+    )
+
+
+@mcp.tool()
+def delete_gameobject(
+    instance_id: int | None = None,
+    name: str | None = None,
+    path: str | None = None,
+) -> str:
+    """Delete a GameObject from the active scene with Unity Undo support.
+
+    Args:
+        instance_id: Unity instance id from hierarchy/find results.
+        name: Exact GameObject name. Instance id or path is safer if names repeat.
+        path: Hierarchy path such as Root/Player.
+    """
+    return pretty(client.get("/scene/delete-gameobject", id=instance_id, name=name, path=path))
+
+
+@mcp.tool()
+def duplicate_gameobject(
+    instance_id: int | None = None,
+    name: str | None = None,
+    path: str | None = None,
+    new_name: str | None = None,
+    parent_instance_id: int | None = None,
+    parent_name: str | None = None,
+    parent_path: str | None = None,
+    position: list[float] | None = None,
+    rotation: list[float] | None = None,
+    scale: list[float] | None = None,
+) -> str:
+    """Duplicate a GameObject in the active scene.
+
+    Args:
+        instance_id: Unity instance id from hierarchy/find results.
+        name: Exact source GameObject name.
+        path: Source hierarchy path such as Root/Player.
+        new_name: Optional name for the duplicate.
+        parent_instance_id: Optional destination parent Unity instance id.
+        parent_name: Optional exact destination parent GameObject name.
+        parent_path: Optional destination parent hierarchy path.
+        position: Optional [x, y, z] world position.
+        rotation: Optional [x, y, z] world Euler angles.
+        scale: Optional [x, y, z] local scale.
+    """
+    return pretty(
+        client.get(
+            "/scene/duplicate-gameobject",
+            id=instance_id,
+            name=name,
+            path=path,
+            newName=new_name,
+            parentId=parent_instance_id,
+            parentName=parent_name,
+            parentPath=parent_path,
+            position=position,
+            rotation=rotation,
+            scale=scale,
+        )
+    )
+
+
+@mcp.tool()
 def read_console(count: int = 50) -> str:
     """Return recent Unity Console entries."""
     return pretty(client.get("/console", count=count))
