@@ -18,6 +18,7 @@ The project is split into two parts:
 - Capture a screenshot from the Scene View or Main Camera.
 - Create, delete, and duplicate GameObjects with Undo support.
 - Add and remove GameObject components with Undo support.
+- Capture scene snapshots, diff scene changes, and run safe rollback-capable edit batches.
 - Set a GameObject transform with Undo support.
 
 This is intentionally small. It is a stable base for expanding toward a Cursor-like Unity workflow instead of a large collection of brittle commands.
@@ -108,6 +109,38 @@ python -m codex_unity_mcp.server
 
 The MCP server communicates over stdio, so it is normally launched by Codex or another MCP client, not manually.
 
+## Safe Edit Mode
+
+Safe Edit Mode is the project-specific workflow for agentic Unity edits. Instead of firing unrelated
+commands blindly, Codex can:
+
+1. Capture a scene snapshot.
+2. Run a batch of allowed scene-edit commands in one Unity Undo group.
+3. Roll the whole batch back automatically if a command fails.
+4. Return a structural diff showing added, removed, and changed GameObjects.
+
+Example batch command payload:
+
+```json
+[
+  {
+    "tool": "create_gameobject",
+    "params": {
+      "name": "SafeEditCube",
+      "primitive_type": "cube",
+      "position": [0, 1, 0]
+    }
+  },
+  {
+    "tool": "add_component",
+    "params": {
+      "path": "SafeEditCube",
+      "component_type": "Rigidbody"
+    }
+  }
+]
+```
+
 ## Codex App Setup
 
 The Unity bridge at `http://127.0.0.1:8765` is not an MCP server. Do not add that URL directly to
@@ -195,6 +228,9 @@ If your MCP client does not support `cwd`, use the venv Python executable and mo
 - `duplicate_gameobject(instance_id=None, name=None, path=None, new_name=None, parent_instance_id=None, parent_name=None, parent_path=None, position=None, rotation=None, scale=None)`
 - `add_component(component_type, instance_id=None, name=None, path=None, allow_multiple=False)`
 - `remove_component(component_type, instance_id=None, name=None, path=None, remove_all=False)`
+- `snapshot_scene(snapshot_id=None)`
+- `diff_scene(before_snapshot_id, after_snapshot_id=None)`
+- `safe_batch(commands, rollback_on_error=True, label="Codex MCP Safe Batch")`
 - `read_console(count=50)`
 - `take_scene_screenshot(source="scene_view", include_image=False, max_resolution=512)`
 

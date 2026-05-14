@@ -28,6 +28,7 @@ namespace CodexUnityMcp
         private const string PrefixHost = "127.0.0.1";
         private const string GitPackageUrl = "https://github.com/HellterEnjoy/UnityMCP.git?path=/unity-package/Packages/com.codex.unity-mcp#main";
         private static readonly ConcurrentQueue<BridgeRequest> Requests = new ConcurrentQueue<BridgeRequest>();
+        private static readonly Dictionary<string, SceneSnapshot> Snapshots = new Dictionary<string, SceneSnapshot>(StringComparer.OrdinalIgnoreCase);
 
         private static HttpListener _listener;
         private static Thread _listenerThread;
@@ -38,6 +39,8 @@ namespace CodexUnityMcp
         static CodexMcpBridge()
         {
             _port = EditorPrefs.GetInt("CodexMcpBridge.Port", DefaultPort);
+            AssemblyReloadEvents.beforeAssemblyReload += StopServer;
+            EditorApplication.quitting += StopServer;
             EditorApplication.update += ProcessRequests;
             EditorApplication.delayCall += StartServer;
         }
@@ -261,6 +264,12 @@ namespace CodexUnityMcp
                     return AddComponentToGameObject(query);
                 case "/scene/remove-component":
                     return RemoveComponentFromGameObject(query);
+                case "/safe/snapshot":
+                    return CreateSceneSnapshot(query);
+                case "/safe/diff":
+                    return DiffSceneSnapshot(query);
+                case "/safe/batch":
+                    return ExecuteSafeBatch(query);
                 case "/console":
                     return ReadConsole(query);
                 case "/screenshot":
@@ -684,6 +693,128 @@ namespace CodexUnityMcp
             });
         }
 
+        private static Dictionary<string, object> CreateSceneSnapshot(Dictionary<string, string> query)
+        {
+            var id = Get(query, "id", string.Empty);
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                id = $"snapshot-{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+            }
+
+            var snapshot = CaptureSceneSnapshot(id);
+            Snapshots[id] = snapshot;
+            return Ok(SnapshotSummary(snapshot));
+        }
+
+        private static Dictionary<string, object> DiffSceneSnapshot(Dictionary<string, string> query)
+        {
+            var beforeId = Get(query, "before", string.Empty);
+            if (string.IsNullOrWhiteSpace(beforeId))
+            {
+                return Fail("snapshot_required", "before snapshot id is required");
+            }
+
+            if (!Snapshots.TryGetValue(beforeId, out var before))
+            {
+                return Fail("snapshot_not_found", $"Snapshot '{beforeId}' was not found");
+            }
+
+            SceneSnapshot after;
+            var afterId = Get(query, "after", string.Empty);
+            if (!string.IsNullOrWhiteSpace(afterId))
+            {
+                if (!Snapshots.TryGetValue(afterId, out after))
+                {
+                    return Fail("snapshot_not_found", $"Snapshot '{afterId}' was not found");
+                }
+            }
+            else
+            {
+                after = CaptureSceneSnapshot("current");
+            }
+
+            return Ok(BuildSnapshotDiff(before, after));
+        }
+
+        private static Dictionary<string, object> ExecuteSafeBatch(Dictionary<string, string> query)
+        {
+            if (!query.TryGetValue("commands", out var rawCommands) || string.IsNullOrWhiteSpace(rawCommands))
+            {
+                return Fail("commands_required", "commands JSON array is required");
+            }
+
+            List<object> parsed;
+            try
+            {
+                parsed = MiniJson.Parse(rawCommands) as List<object>;
+            }
+            catch (Exception ex)
+            {
+                return Fail("invalid_commands_json", ex.Message);
+            }
+
+            if (parsed == null)
+            {
+                return Fail("invalid_commands_json", "commands must be a JSON array");
+            }
+
+            var rollbackOnError = Bool(query, "rollbackOnError", true);
+            var label = Get(query, "label", "Codex MCP Safe Batch");
+            var before = CaptureSceneSnapshot("before");
+            Undo.IncrementCurrentGroup();
+            var undoGroup = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName(label);
+
+            var results = new List<object>();
+            var success = true;
+            var failedIndex = -1;
+
+            for (var i = 0; i < parsed.Count; i++)
+            {
+                var command = parsed[i] as Dictionary<string, object>;
+                if (command == null)
+                {
+                    results.Add(new Dictionary<string, object>
+                    {
+                        { "ok", false },
+                        { "error", "invalid_command" },
+                        { "message", "Command must be an object" }
+                    });
+                    success = false;
+                    failedIndex = i;
+                    break;
+                }
+
+                var commandResult = ExecuteSafeBatchCommand(command);
+                results.Add(commandResult);
+                if (!IsOk(commandResult))
+                {
+                    success = false;
+                    failedIndex = i;
+                    break;
+                }
+            }
+
+            Undo.CollapseUndoOperations(undoGroup);
+
+            var rolledBack = false;
+            if (!success && rollbackOnError)
+            {
+                Undo.RevertAllDownToGroup(undoGroup);
+                rolledBack = true;
+            }
+
+            var after = CaptureSceneSnapshot("after");
+            return Ok(new Dictionary<string, object>
+            {
+                { "success", success },
+                { "rolledBack", rolledBack },
+                { "failedIndex", failedIndex },
+                { "results", results },
+                { "diff", BuildSnapshotDiff(before, after) }
+            });
+        }
+
         private static Dictionary<string, object> ReadConsole(Dictionary<string, string> query)
         {
             var count = Int(query, "count", 50);
@@ -977,6 +1108,274 @@ namespace CodexUnityMcp
 
             list.Sort((a, b) => string.Compare(GetPath(a), GetPath(b), StringComparison.OrdinalIgnoreCase));
             return list;
+        }
+
+        private static SceneSnapshot CaptureSceneSnapshot(string id)
+        {
+            var scene = SceneManager.GetActiveScene();
+            var objects = new Dictionary<string, SnapshotObject>(StringComparer.OrdinalIgnoreCase);
+            foreach (var go in SceneGameObjects(true))
+            {
+                var path = GetPath(go);
+                objects[path] = new SnapshotObject
+                {
+                    Id = go.GetInstanceID(),
+                    Name = go.name,
+                    Path = path,
+                    ActiveSelf = go.activeSelf,
+                    ActiveInHierarchy = go.activeInHierarchy,
+                    Tag = SafeTag(go),
+                    Layer = LayerMask.LayerToName(go.layer),
+                    TransformSignature = TransformSignature(go.transform),
+                    ComponentsSignature = ComponentsSignature(go)
+                };
+            }
+
+            return new SceneSnapshot
+            {
+                Id = id,
+                CapturedUtc = DateTime.UtcNow,
+                SceneName = scene.name,
+                ScenePath = scene.path,
+                IsDirty = scene.isDirty,
+                Objects = objects
+            };
+        }
+
+        private static Dictionary<string, object> SnapshotSummary(SceneSnapshot snapshot)
+        {
+            return new Dictionary<string, object>
+            {
+                { "id", snapshot.Id },
+                { "capturedUtc", snapshot.CapturedUtc.ToString("o", CultureInfo.InvariantCulture) },
+                { "scene", snapshot.SceneName },
+                { "path", snapshot.ScenePath },
+                { "isDirty", snapshot.IsDirty },
+                { "objectCount", snapshot.Objects.Count }
+            };
+        }
+
+        private static Dictionary<string, object> BuildSnapshotDiff(SceneSnapshot before, SceneSnapshot after)
+        {
+            var added = new List<object>();
+            var removed = new List<object>();
+            var changed = new List<object>();
+
+            foreach (var entry in after.Objects)
+            {
+                if (!before.Objects.TryGetValue(entry.Key, out var beforeObject))
+                {
+                    added.Add(SnapshotObjectPayload(entry.Value));
+                    continue;
+                }
+
+                var changes = SnapshotObjectChanges(beforeObject, entry.Value);
+                if (changes.Count > 0)
+                {
+                    changed.Add(new Dictionary<string, object>
+                    {
+                        { "path", entry.Key },
+                        { "before", SnapshotObjectPayload(beforeObject) },
+                        { "after", SnapshotObjectPayload(entry.Value) },
+                        { "changes", changes }
+                    });
+                }
+            }
+
+            foreach (var entry in before.Objects)
+            {
+                if (!after.Objects.ContainsKey(entry.Key))
+                {
+                    removed.Add(SnapshotObjectPayload(entry.Value));
+                }
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "before", SnapshotSummary(before) },
+                { "after", SnapshotSummary(after) },
+                { "addedCount", added.Count },
+                { "removedCount", removed.Count },
+                { "changedCount", changed.Count },
+                { "added", added },
+                { "removed", removed },
+                { "changed", changed }
+            };
+        }
+
+        private static Dictionary<string, object> SnapshotObjectPayload(SnapshotObject item)
+        {
+            return new Dictionary<string, object>
+            {
+                { "id", item.Id },
+                { "name", item.Name },
+                { "path", item.Path },
+                { "activeSelf", item.ActiveSelf },
+                { "activeInHierarchy", item.ActiveInHierarchy },
+                { "tag", item.Tag },
+                { "layer", item.Layer },
+                { "transform", item.TransformSignature },
+                { "components", item.ComponentsSignature }
+            };
+        }
+
+        private static List<object> SnapshotObjectChanges(SnapshotObject before, SnapshotObject after)
+        {
+            var changes = new List<object>();
+            AddSnapshotChange(changes, "activeSelf", before.ActiveSelf, after.ActiveSelf);
+            AddSnapshotChange(changes, "activeInHierarchy", before.ActiveInHierarchy, after.ActiveInHierarchy);
+            AddSnapshotChange(changes, "tag", before.Tag, after.Tag);
+            AddSnapshotChange(changes, "layer", before.Layer, after.Layer);
+            AddSnapshotChange(changes, "transform", before.TransformSignature, after.TransformSignature);
+            AddSnapshotChange(changes, "components", before.ComponentsSignature, after.ComponentsSignature);
+            return changes;
+        }
+
+        private static void AddSnapshotChange(List<object> changes, string field, object before, object after)
+        {
+            var beforeText = MiniJson.Serialize(before);
+            var afterText = MiniJson.Serialize(after);
+            if (beforeText == afterText)
+            {
+                return;
+            }
+
+            changes.Add(new Dictionary<string, object>
+            {
+                { "field", field },
+                { "before", before },
+                { "after", after }
+            });
+        }
+
+        private static List<object> ComponentsSignature(GameObject go)
+        {
+            var components = new List<object>();
+            foreach (var component in go.GetComponents<Component>())
+            {
+                components.Add(component == null ? "<missing>" : component.GetType().FullName);
+            }
+            return components;
+        }
+
+        private static Dictionary<string, object> TransformSignature(Transform transform)
+        {
+            return new Dictionary<string, object>
+            {
+                { "position", Vec3(transform.position) },
+                { "rotation", Vec3(transform.eulerAngles) },
+                { "scale", Vec3(transform.localScale) }
+            };
+        }
+
+        private static Dictionary<string, object> ExecuteSafeBatchCommand(Dictionary<string, object> command)
+        {
+            var tool = GetObjectString(command, "tool");
+            var parameters = ObjectDict(command, "params");
+            if (parameters == null)
+            {
+                parameters = ObjectDict(command, "args") ?? new Dictionary<string, object>();
+            }
+
+            var query = QueryFromObject(parameters);
+            switch (tool)
+            {
+                case "create_gameobject":
+                case "create-gameobject":
+                    return CreateGameObject(query);
+                case "delete_gameobject":
+                case "delete-gameobject":
+                    return DeleteGameObject(query);
+                case "duplicate_gameobject":
+                case "duplicate-gameobject":
+                    return DuplicateGameObject(query);
+                case "set_transform":
+                case "set-transform":
+                    return SetTransform(query);
+                case "add_component":
+                case "add-component":
+                    return AddComponentToGameObject(query);
+                case "remove_component":
+                case "remove-component":
+                    return RemoveComponentFromGameObject(query);
+                default:
+                    return Fail("unsupported_batch_tool", $"Safe batch does not support tool '{tool}'");
+            }
+        }
+
+        private static bool IsOk(object result)
+        {
+            var dictionary = result as Dictionary<string, object>;
+            return dictionary != null && dictionary.TryGetValue("ok", out var ok) && ok is bool value && value;
+        }
+
+        private static Dictionary<string, object> ObjectDict(Dictionary<string, object> source, string key)
+        {
+            return source.TryGetValue(key, out var value) ? value as Dictionary<string, object> : null;
+        }
+
+        private static string GetObjectString(Dictionary<string, object> source, string key)
+        {
+            return source.TryGetValue(key, out var value) && value != null ? value.ToString() : string.Empty;
+        }
+
+        private static Dictionary<string, string> QueryFromObject(Dictionary<string, object> parameters)
+        {
+            var query = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in parameters)
+            {
+                if (entry.Value == null)
+                {
+                    continue;
+                }
+
+                if (entry.Value is IList list && !(entry.Value is string))
+                {
+                    var parts = new List<string>();
+                    foreach (var item in list)
+                    {
+                        parts.Add(Convert.ToString(item, CultureInfo.InvariantCulture));
+                    }
+                    query[NormalizeQueryKey(entry.Key)] = string.Join(",", parts.ToArray());
+                }
+                else if (entry.Value is bool boolean)
+                {
+                    query[NormalizeQueryKey(entry.Key)] = boolean ? "true" : "false";
+                }
+                else
+                {
+                    query[NormalizeQueryKey(entry.Key)] = Convert.ToString(entry.Value, CultureInfo.InvariantCulture);
+                }
+            }
+
+            return query;
+        }
+
+        private static string NormalizeQueryKey(string key)
+        {
+            switch (key)
+            {
+                case "instance_id":
+                    return "id";
+                case "primitive_type":
+                    return "primitiveType";
+                case "parent_id":
+                    return "parentId";
+                case "parent_name":
+                    return "parentName";
+                case "parent_path":
+                    return "parentPath";
+                case "new_name":
+                    return "newName";
+                case "component_type":
+                    return "componentType";
+                case "allow_multiple":
+                    return "allowMultiple";
+                case "remove_all":
+                    return "removeAll";
+                default:
+                    return key;
+            }
         }
 
         private static bool Matches(GameObject go, string text, string mode)
@@ -1479,6 +1878,29 @@ namespace CodexUnityMcp
             public Func<object> Action { get; }
             public TaskCompletionSource<object> Completion { get; } = new TaskCompletionSource<object>();
         }
+
+        private sealed class SceneSnapshot
+        {
+            public string Id { get; set; }
+            public DateTime CapturedUtc { get; set; }
+            public string SceneName { get; set; }
+            public string ScenePath { get; set; }
+            public bool IsDirty { get; set; }
+            public Dictionary<string, SnapshotObject> Objects { get; set; }
+        }
+
+        private sealed class SnapshotObject
+        {
+            public int Id { get; set; }
+            public string Name { get; set; }
+            public string Path { get; set; }
+            public bool ActiveSelf { get; set; }
+            public bool ActiveInHierarchy { get; set; }
+            public string Tag { get; set; }
+            public string Layer { get; set; }
+            public Dictionary<string, object> TransformSignature { get; set; }
+            public List<object> ComponentsSignature { get; set; }
+        }
     }
 
     internal static class MiniJson
@@ -1488,6 +1910,12 @@ namespace CodexUnityMcp
             var builder = new StringBuilder(4096);
             WriteValue(builder, value);
             return builder.ToString();
+        }
+
+        public static object Parse(string json)
+        {
+            var parser = new Parser(json);
+            return parser.Parse();
         }
 
         private static void WriteValue(StringBuilder builder, object value)
@@ -1613,6 +2041,263 @@ namespace CodexUnityMcp
                 }
             }
             builder.Append('"');
+        }
+
+        private sealed class Parser
+        {
+            private readonly string _json;
+            private int _index;
+
+            public Parser(string json)
+            {
+                _json = json ?? string.Empty;
+            }
+
+            public object Parse()
+            {
+                var result = ParseValue();
+                SkipWhitespace();
+                if (_index != _json.Length)
+                {
+                    throw new FormatException("Unexpected trailing JSON content");
+                }
+
+                return result;
+            }
+
+            private object ParseValue()
+            {
+                SkipWhitespace();
+                if (_index >= _json.Length)
+                {
+                    throw new FormatException("Unexpected end of JSON");
+                }
+
+                var c = _json[_index];
+                if (c == '{')
+                {
+                    return ParseObject();
+                }
+                if (c == '[')
+                {
+                    return ParseArray();
+                }
+                if (c == '"')
+                {
+                    return ParseString();
+                }
+                if (c == 't' && Match("true"))
+                {
+                    return true;
+                }
+                if (c == 'f' && Match("false"))
+                {
+                    return false;
+                }
+                if (c == 'n' && Match("null"))
+                {
+                    return null;
+                }
+                return ParseNumber();
+            }
+
+            private Dictionary<string, object> ParseObject()
+            {
+                Expect('{');
+                var result = new Dictionary<string, object>();
+                SkipWhitespace();
+                if (Peek('}'))
+                {
+                    _index++;
+                    return result;
+                }
+
+                while (true)
+                {
+                    SkipWhitespace();
+                    var key = ParseString();
+                    SkipWhitespace();
+                    Expect(':');
+                    result[key] = ParseValue();
+                    SkipWhitespace();
+                    if (Peek('}'))
+                    {
+                        _index++;
+                        return result;
+                    }
+                    Expect(',');
+                }
+            }
+
+            private List<object> ParseArray()
+            {
+                Expect('[');
+                var result = new List<object>();
+                SkipWhitespace();
+                if (Peek(']'))
+                {
+                    _index++;
+                    return result;
+                }
+
+                while (true)
+                {
+                    result.Add(ParseValue());
+                    SkipWhitespace();
+                    if (Peek(']'))
+                    {
+                        _index++;
+                        return result;
+                    }
+                    Expect(',');
+                }
+            }
+
+            private string ParseString()
+            {
+                Expect('"');
+                var builder = new StringBuilder();
+                while (_index < _json.Length)
+                {
+                    var c = _json[_index++];
+                    if (c == '"')
+                    {
+                        return builder.ToString();
+                    }
+
+                    if (c != '\\')
+                    {
+                        builder.Append(c);
+                        continue;
+                    }
+
+                    if (_index >= _json.Length)
+                    {
+                        throw new FormatException("Invalid JSON escape");
+                    }
+
+                    var escaped = _json[_index++];
+                    switch (escaped)
+                    {
+                        case '"':
+                        case '\\':
+                        case '/':
+                            builder.Append(escaped);
+                            break;
+                        case 'b':
+                            builder.Append('\b');
+                            break;
+                        case 'f':
+                            builder.Append('\f');
+                            break;
+                        case 'n':
+                            builder.Append('\n');
+                            break;
+                        case 'r':
+                            builder.Append('\r');
+                            break;
+                        case 't':
+                            builder.Append('\t');
+                            break;
+                        case 'u':
+                            if (_index + 4 > _json.Length)
+                            {
+                                throw new FormatException("Invalid unicode escape");
+                            }
+                            var hex = _json.Substring(_index, 4);
+                            builder.Append((char)int.Parse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture));
+                            _index += 4;
+                            break;
+                        default:
+                            throw new FormatException($"Invalid JSON escape '\\{escaped}'");
+                    }
+                }
+
+                throw new FormatException("Unterminated JSON string");
+            }
+
+            private object ParseNumber()
+            {
+                var start = _index;
+                if (Peek('-'))
+                {
+                    _index++;
+                }
+
+                while (_index < _json.Length && char.IsDigit(_json[_index]))
+                {
+                    _index++;
+                }
+
+                var isFloat = false;
+                if (Peek('.'))
+                {
+                    isFloat = true;
+                    _index++;
+                    while (_index < _json.Length && char.IsDigit(_json[_index]))
+                    {
+                        _index++;
+                    }
+                }
+
+                if (_index < _json.Length && (_json[_index] == 'e' || _json[_index] == 'E'))
+                {
+                    isFloat = true;
+                    _index++;
+                    if (_index < _json.Length && (_json[_index] == '-' || _json[_index] == '+'))
+                    {
+                        _index++;
+                    }
+                    while (_index < _json.Length && char.IsDigit(_json[_index]))
+                    {
+                        _index++;
+                    }
+                }
+
+                var raw = _json.Substring(start, _index - start);
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    throw new FormatException("Expected JSON value");
+                }
+
+                return isFloat
+                    ? (object)double.Parse(raw, CultureInfo.InvariantCulture)
+                    : long.Parse(raw, CultureInfo.InvariantCulture);
+            }
+
+            private bool Match(string text)
+            {
+                if (_index + text.Length > _json.Length || string.Compare(_json, _index, text, 0, text.Length, StringComparison.Ordinal) != 0)
+                {
+                    return false;
+                }
+
+                _index += text.Length;
+                return true;
+            }
+
+            private void SkipWhitespace()
+            {
+                while (_index < _json.Length && char.IsWhiteSpace(_json[_index]))
+                {
+                    _index++;
+                }
+            }
+
+            private void Expect(char expected)
+            {
+                SkipWhitespace();
+                if (_index >= _json.Length || _json[_index] != expected)
+                {
+                    throw new FormatException($"Expected '{expected}'");
+                }
+                _index++;
+            }
+
+            private bool Peek(char expected)
+            {
+                return _index < _json.Length && _json[_index] == expected;
+            }
         }
     }
 }

@@ -16,6 +16,38 @@ def pretty(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+_BATCH_PARAM_ALIASES = {
+    "instance_id": "id",
+    "primitive_type": "primitiveType",
+    "parent_instance_id": "parentId",
+    "parent_id": "parentId",
+    "parent_name": "parentName",
+    "parent_path": "parentPath",
+    "new_name": "newName",
+    "component_type": "componentType",
+    "allow_multiple": "allowMultiple",
+    "remove_all": "removeAll",
+}
+
+
+def normalize_batch_commands(commands: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized = []
+    for command in commands:
+        item = dict(command)
+        params = item.get("params")
+        if isinstance(params, dict):
+            item["params"] = {
+                _BATCH_PARAM_ALIASES.get(str(key), str(key)): value for key, value in params.items()
+            }
+        args = item.get("args")
+        if isinstance(args, dict):
+            item["args"] = {
+                _BATCH_PARAM_ALIASES.get(str(key), str(key)): value for key, value in args.items()
+            }
+        normalized.append(item)
+    return normalized
+
+
 @mcp.resource("unity://editor/state")
 def editor_state_resource() -> str:
     """Current Unity Editor state, active scene, and selection."""
@@ -287,6 +319,54 @@ def remove_component(
             path=path,
             componentType=component_type,
             removeAll=remove_all,
+        )
+    )
+
+
+@mcp.tool()
+def snapshot_scene(snapshot_id: str | None = None) -> str:
+    """Capture a named structural snapshot of the active scene for later diffing.
+
+    Args:
+        snapshot_id: Optional snapshot id. If omitted, Unity creates a timestamp id.
+    """
+    return pretty(client.get("/safe/snapshot", id=snapshot_id))
+
+
+@mcp.tool()
+def diff_scene(before_snapshot_id: str, after_snapshot_id: str | None = None) -> str:
+    """Diff a previous scene snapshot against another snapshot or the current scene.
+
+    Args:
+        before_snapshot_id: Snapshot id captured by snapshot_scene.
+        after_snapshot_id: Optional second snapshot id. If omitted, compares against current scene.
+    """
+    return pretty(client.get("/safe/diff", before=before_snapshot_id, after=after_snapshot_id))
+
+
+@mcp.tool()
+def safe_batch(
+    commands: list[dict[str, Any]],
+    rollback_on_error: bool = True,
+    label: str = "Codex MCP Safe Batch",
+) -> str:
+    """Run a batch of scene-edit commands in one Unity Undo group with optional rollback.
+
+    Supported command tool names:
+    create_gameobject, delete_gameobject, duplicate_gameobject, set_transform,
+    add_component, remove_component.
+
+    Args:
+        commands: List of {"tool": "...", "params": {...}} command objects.
+        rollback_on_error: Revert the entire Undo group if any command fails.
+        label: Unity Undo group label.
+    """
+    return pretty(
+        client.get(
+            "/safe/batch",
+            commands=json.dumps(normalize_batch_commands(commands), ensure_ascii=False),
+            rollbackOnError=rollback_on_error,
+            label=label,
         )
     )
 
