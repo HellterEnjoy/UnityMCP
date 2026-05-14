@@ -15,6 +15,8 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
 
+#pragma warning disable 0618
+
 namespace CodexUnityMcp
 {
     [InitializeOnLoad]
@@ -694,7 +696,7 @@ namespace CodexUnityMcp
                         { "size", Vec3(prop.boundsValue.size) }
                     };
                 case SerializedPropertyType.Quaternion:
-                    return Vec4(prop.quaternionValue);
+                    return QuaternionValue(prop.quaternionValue);
                 default:
                     return null;
             }
@@ -967,6 +969,11 @@ namespace CodexUnityMcp
         private static List<object> Vec4(Vector4 v)
         {
             return new List<object> { v.x, v.y, v.z, v.w };
+        }
+
+        private static List<object> QuaternionValue(Quaternion q)
+        {
+            return new List<object> { q.x, q.y, q.z, q.w };
         }
 
         private static void AddCorsHeaders(HttpListenerResponse response)
