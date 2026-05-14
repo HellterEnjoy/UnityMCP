@@ -16,7 +16,7 @@ class UnityBridgeError(RuntimeError):
 
 
 class UnityClient:
-    def __init__(self, base_url: str | None = None, timeout: float = 30.0) -> None:
+    def __init__(self, base_url: str | None = None, timeout: float = 90.0) -> None:
         self.base_url = (base_url or os.environ.get("UNITY_MCP_BRIDGE_URL") or DEFAULT_BASE_URL).rstrip("/")
         self.timeout = timeout
 
@@ -37,6 +37,10 @@ class UnityClient:
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise UnityBridgeError(f"Unity bridge HTTP {exc.code}: {detail}") from exc
+        except TimeoutError as exc:
+            raise UnityBridgeError(
+                f"Unity bridge request to {endpoint} timed out after {self.timeout:.1f}s."
+            ) from exc
         except urllib.error.URLError as exc:
             raise UnityBridgeError(
                 f"Cannot reach Unity bridge at {self.base_url}. "

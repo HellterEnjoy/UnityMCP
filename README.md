@@ -19,6 +19,11 @@ The project is split into two parts:
 - Create, delete, and duplicate GameObjects with Undo support.
 - Add and remove GameObject components with Undo support.
 - Capture scene snapshots, diff scene changes, and run safe rollback-capable edit batches.
+- Enter and exit Play Mode, plus poll Play Mode state across bridge restarts.
+- Invoke Unity editor menu items and trigger Unity Test Runner runs.
+- Read and write serialized component fields, including during Play Mode.
+- Send keyboard and mouse input to the Unity Game view.
+- Wait for objects, logs, scene changes, and component field values.
 - Set a GameObject transform with Undo support.
 
 This is intentionally small. It is a stable base for expanding toward a Cursor-like Unity workflow instead of a large collection of brittle commands.
@@ -141,6 +146,21 @@ Example batch command payload:
 ]
 ```
 
+## Semi-Realtime Game Testing
+
+The bridge now supports a lightweight gameplay loop for agentic testing:
+
+1. Enter Play Mode.
+2. Poll Play Mode state until Unity has finished reloading.
+3. Send keyboard or mouse input to the Game view.
+4. Read or write runtime component fields.
+5. Wait for logs, scene changes, object existence, or field values.
+6. Optionally run Unity Test Runner and poll the run status.
+
+This is not a video stream or a direct in-process scripting shell. The MCP server works through
+fast repeated bridge requests and reconnect-tolerant polling, which is enough for semi-realtime
+test orchestration without embedding Codex inside the Unity process.
+
 ## Codex App Setup
 
 The Unity bridge at `http://127.0.0.1:8765` is not an MCP server. Do not add that URL directly to
@@ -231,6 +251,23 @@ If your MCP client does not support `cwd`, use the venv Python executable and mo
 - `snapshot_scene(snapshot_id=None)`
 - `diff_scene(before_snapshot_id, after_snapshot_id=None)`
 - `safe_batch(commands, rollback_on_error=True, label="Codex MCP Safe Batch")`
+- `enter_play_mode()`
+- `exit_play_mode()`
+- `get_play_state()`
+- `invoke_menu_item(menu_path)`
+- `run_unity_tests(mode="editmode", assembly_names=None, test_names=None, group_names=None)`
+- `get_unity_test_status(run_id=None)`
+- `get_component_field(component_type, property_path, instance_id=None, name=None, path=None, component_index=0)`
+- `set_component_field(component_type, property_path, value, instance_id=None, name=None, path=None, component_index=0)`
+- `send_keyboard_input(key, event_type="press", character=None)`
+- `send_mouse_input(x, y, event_type="click", button=0)`
+- `click_ui_element(instance_id=None, name=None, path=None, button=0)`
+- `wait_for_object(instance_id=None, name=None, path=None, exists=True, timeout_ms=5000, poll_ms=100)`
+- `wait_for_log(text, log_type=None, since_seconds=60.0, timeout_ms=5000, poll_ms=100)`
+- `wait_for_scene(scene_name=None, scene_path=None, timeout_ms=5000, poll_ms=100)`
+- `wait_for_component_field(component_type, property_path, expected, instance_id=None, name=None, path=None, component_index=0, comparison="equals", timeout_ms=5000, poll_ms=100)`
+- `wait_for_play_mode(is_playing=True, is_paused=None, timeout_ms=10000, poll_ms=100)`
+- `wait_for_unity_tests(require_success=True, timeout_ms=60000, poll_ms=250)`
 - `read_console(count=50)`
 - `take_scene_screenshot(source="scene_view", include_image=False, max_resolution=512)`
 
@@ -249,8 +286,8 @@ If your MCP client does not support `cwd`, use the venv Python executable and mo
 
 ## Useful Next Extensions
 
-1. Add safe serialized property writes.
-2. Add prefab-aware inspection and overrides.
-3. Add AssetDatabase search.
-4. Add play mode controls.
-5. Add test runner endpoints.
+1. Add richer UI-object targeting beyond center-point clicks.
+2. Add runtime assertions for profiler counters, animation state, and physics contacts.
+3. Add prefab-aware inspection and overrides.
+4. Add AssetDatabase search.
+5. Add screenshot diffing and visual regression baselines.

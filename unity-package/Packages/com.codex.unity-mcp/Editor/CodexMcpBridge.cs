@@ -13,6 +13,7 @@ using UnityEditor;
 using UnityEditor.PackageManager;
 using UnityEditor.PackageManager.Requests;
 using UnityEditor.SceneManagement;
+using UnityEditor.TestTools.TestRunner.Api;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
@@ -27,21 +28,31 @@ namespace CodexUnityMcp
         private const int DefaultPort = 8765;
         private const string PrefixHost = "127.0.0.1";
         private const string GitPackageUrl = "https://github.com/HellterEnjoy/UnityMCP.git?path=/unity-package/Packages/com.codex.unity-mcp#main";
+        private const int MaxRecentLogs = 256;
         private static readonly ConcurrentQueue<BridgeRequest> Requests = new ConcurrentQueue<BridgeRequest>();
         private static readonly Dictionary<string, SceneSnapshot> Snapshots = new Dictionary<string, SceneSnapshot>(StringComparer.OrdinalIgnoreCase);
+        private static readonly object RecentLogsLock = new object();
+        private static readonly List<RuntimeLogEntry> RecentLogs = new List<RuntimeLogEntry>();
+        private static readonly object TestRunLock = new object();
 
         private static HttpListener _listener;
         private static Thread _listenerThread;
         private static volatile bool _running;
         private static int _port;
         private static AddRequest _packageUpdateRequest;
+        private static TestRunState _currentTestRun;
+        private static double _nextAutoStartTime;
 
         static CodexMcpBridge()
         {
             _port = EditorPrefs.GetInt("CodexMcpBridge.Port", DefaultPort);
             AssemblyReloadEvents.beforeAssemblyReload += StopServer;
             EditorApplication.quitting += StopServer;
+            EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+            Application.logMessageReceivedThreaded += CaptureRuntimeLog;
             EditorApplication.update += ProcessRequests;
+            EditorApplication.update += AutoStartServerIfNeeded;
+            _nextAutoStartTime = EditorApplication.timeSinceStartup;
             EditorApplication.delayCall += StartServer;
         }
 
@@ -72,6 +83,7 @@ namespace CodexUnityMcp
             catch (Exception ex)
             {
                 _running = false;
+                _nextAutoStartTime = EditorApplication.timeSinceStartup + 2.0d;
                 Debug.LogError($"Failed to start Codex MCP Bridge: {ex.Message}");
             }
         }
@@ -92,6 +104,7 @@ namespace CodexUnityMcp
             }
 
             _listener = null;
+            _nextAutoStartTime = EditorApplication.timeSinceStartup + 1.0d;
             Debug.Log("Codex MCP Bridge stopped");
         }
 
@@ -170,6 +183,31 @@ namespace CodexUnityMcp
             _packageUpdateRequest = null;
         }
 
+        private static void OnPlayModeStateChanged(PlayModeStateChange state)
+        {
+            if (state == PlayModeStateChange.EnteredEditMode || state == PlayModeStateChange.EnteredPlayMode)
+            {
+                _nextAutoStartTime = EditorApplication.timeSinceStartup + 0.5d;
+                EditorApplication.delayCall += StartServer;
+            }
+        }
+
+        private static void AutoStartServerIfNeeded()
+        {
+            if (_running || EditorApplication.isCompiling || EditorApplication.isUpdating)
+            {
+                return;
+            }
+
+            if (EditorApplication.timeSinceStartup < _nextAutoStartTime)
+            {
+                return;
+            }
+
+            _nextAutoStartTime = EditorApplication.timeSinceStartup + 2.0d;
+            StartServer();
+        }
+
         private static void ListenLoop()
         {
             while (_running && _listener != null)
@@ -225,7 +263,9 @@ namespace CodexUnityMcp
                 }
 
                 var query = ParseQuery(context.Request.Url.Query);
-                var result = EnqueueAndWait(() => Dispatch(path, query));
+                var result = IsWaitPath(path)
+                    ? HandleWaitRequest(path, query)
+                    : EnqueueAndWait(() => Dispatch(path, query));
                 WriteJson(context.Response, result);
             }
             catch (Exception ex)
@@ -270,12 +310,95 @@ namespace CodexUnityMcp
                     return DiffSceneSnapshot(query);
                 case "/safe/batch":
                     return ExecuteSafeBatch(query);
+                case "/play/enter":
+                    return EnterPlayMode(query);
+                case "/play/exit":
+                    return ExitPlayMode(query);
+                case "/play/state":
+                    return GetPlayState();
+                case "/menu/invoke":
+                    return InvokeMenuItem(query);
+                case "/tests/run":
+                    return RunUnityTests(query);
+                case "/tests/status":
+                    return GetUnityTestStatus(query);
+                case "/runtime/component-field":
+                    return GetComponentField(query);
+                case "/runtime/set-component-field":
+                    return SetComponentField(query);
+                case "/input/keyboard":
+                    return SendKeyboardInput(query);
+                case "/input/mouse":
+                    return SendMouseInput(query);
+                case "/input/click-ui":
+                    return ClickUiElement(query);
                 case "/console":
                     return ReadConsole(query);
                 case "/screenshot":
                     return CaptureScreenshot(query);
                 default:
                     throw new InvalidOperationException($"Unknown endpoint: {path}");
+            }
+        }
+
+        private static bool IsWaitPath(string path)
+        {
+            switch (path)
+            {
+                case "/wait/object":
+                case "/wait/log":
+                case "/wait/scene":
+                case "/wait/component-field":
+                case "/wait/play-mode":
+                case "/wait/tests":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static Dictionary<string, object> HandleWaitRequest(string path, Dictionary<string, string> query)
+        {
+            var timeoutMs = Int(query, "timeoutMs", 5000);
+            var pollMs = Mathf.Clamp(Int(query, "pollMs", 100), 10, 1000);
+            var startUtc = DateTime.UtcNow;
+            var deadlineUtc = startUtc.AddMilliseconds(Math.Max(1, timeoutMs));
+            Dictionary<string, object> last = null;
+
+            while (DateTime.UtcNow <= deadlineUtc)
+            {
+                last = EnqueueAndWait(() => CheckWaitCondition(path, query)) as Dictionary<string, object>;
+                if (last != null && IsOk(last))
+                {
+                    var data = ObjectDict(last, "data") ?? new Dictionary<string, object>();
+                    data["elapsedMs"] = (int)(DateTime.UtcNow - startUtc).TotalMilliseconds;
+                    return Ok(data);
+                }
+
+                Thread.Sleep(pollMs);
+            }
+
+            return last ?? Fail("wait_timeout", $"Timed out waiting for {path}");
+        }
+
+        private static Dictionary<string, object> CheckWaitCondition(string path, Dictionary<string, string> query)
+        {
+            switch (path)
+            {
+                case "/wait/object":
+                    return WaitForObjectCondition(query);
+                case "/wait/log":
+                    return WaitForLogCondition(query);
+                case "/wait/scene":
+                    return WaitForSceneCondition(query);
+                case "/wait/component-field":
+                    return WaitForComponentFieldCondition(query);
+                case "/wait/play-mode":
+                    return WaitForPlayModeCondition(query);
+                case "/wait/tests":
+                    return WaitForTestsCondition(query);
+                default:
+                    return Fail("unknown_wait_path", $"Unknown wait endpoint: {path}");
             }
         }
 
@@ -813,6 +936,489 @@ namespace CodexUnityMcp
                 { "results", results },
                 { "diff", BuildSnapshotDiff(before, after) }
             });
+        }
+
+        private static Dictionary<string, object> EnterPlayMode(Dictionary<string, string> query)
+        {
+            if (EditorApplication.isPlaying)
+            {
+                return Ok(PlayStatePayload(false));
+            }
+
+            EditorApplication.isPlaying = true;
+            return Ok(PlayStatePayload(true));
+        }
+
+        private static Dictionary<string, object> ExitPlayMode(Dictionary<string, string> query)
+        {
+            if (!EditorApplication.isPlaying && !EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                return Ok(PlayStatePayload(false));
+            }
+
+            EditorApplication.isPlaying = false;
+            return Ok(PlayStatePayload(true));
+        }
+
+        private static Dictionary<string, object> GetPlayState()
+        {
+            return Ok(PlayStatePayload(false));
+        }
+
+        private static Dictionary<string, object> PlayStatePayload(bool requestedChange)
+        {
+            return new Dictionary<string, object>
+            {
+                { "requestedChange", requestedChange },
+                { "isPlaying", EditorApplication.isPlaying },
+                { "isPaused", EditorApplication.isPaused },
+                { "isPlayingOrWillChangePlaymode", EditorApplication.isPlayingOrWillChangePlaymode }
+            };
+        }
+
+        private static Dictionary<string, object> InvokeMenuItem(Dictionary<string, string> query)
+        {
+            var menuPath = Get(query, "menuPath", string.Empty);
+            if (string.IsNullOrWhiteSpace(menuPath))
+            {
+                return Fail("menu_path_required", "menuPath is required");
+            }
+
+            var invoked = EditorApplication.ExecuteMenuItem(menuPath);
+            if (!invoked)
+            {
+                return Fail("menu_not_found", $"Unity menu item '{menuPath}' was not found or could not be invoked");
+            }
+
+            return Ok(new Dictionary<string, object>
+            {
+                { "menuPath", menuPath },
+                { "invoked", true }
+            });
+        }
+
+        private static Dictionary<string, object> RunUnityTests(Dictionary<string, string> query)
+        {
+            lock (TestRunLock)
+            {
+                if (_currentTestRun != null && !_currentTestRun.IsComplete)
+                {
+                    return Fail("tests_already_running", $"Test run '{_currentTestRun.Id}' is still running");
+                }
+            }
+
+            var mode = Get(query, "mode", "editmode").Trim().ToLowerInvariant();
+            var filter = BuildTestFilter(query, mode);
+            var settings = new ExecutionSettings
+            {
+                filters = new[] { filter }
+            };
+
+            var run = new TestRunState
+            {
+                Id = $"testrun-{DateTime.UtcNow:yyyyMMddHHmmssfff}",
+                Mode = mode,
+                StartedUtc = DateTime.UtcNow,
+                Status = "running"
+            };
+
+            var callbacks = new CodexTestCallbacks(run);
+            var api = ScriptableObject.CreateInstance<TestRunnerApi>();
+            run.Api = api;
+            run.Callbacks = callbacks;
+
+            lock (TestRunLock)
+            {
+                _currentTestRun = run;
+            }
+
+            api.RegisterCallbacks(callbacks);
+            api.Execute(settings);
+
+            return Ok(TestRunPayload(run));
+        }
+
+        private static Filter BuildTestFilter(Dictionary<string, string> query, string mode)
+        {
+            var filter = new Filter();
+
+            if (query.TryGetValue("assemblyNames", out var assemblyNames) && !string.IsNullOrWhiteSpace(assemblyNames))
+            {
+                filter.assemblyNames = SplitCsv(assemblyNames);
+            }
+
+            if (query.TryGetValue("testNames", out var testNames) && !string.IsNullOrWhiteSpace(testNames))
+            {
+                filter.testNames = SplitCsv(testNames);
+            }
+
+            if (query.TryGetValue("groupNames", out var groupNames) && !string.IsNullOrWhiteSpace(groupNames))
+            {
+                filter.groupNames = SplitCsv(groupNames);
+            }
+
+            switch (mode)
+            {
+                case "playmode":
+                case "play":
+                    filter.testMode = TestMode.PlayMode;
+                    break;
+                case "editmode":
+                case "edit":
+                    filter.testMode = TestMode.EditMode;
+                    break;
+            }
+
+            return filter;
+        }
+
+        private static Dictionary<string, object> GetUnityTestStatus(Dictionary<string, string> query)
+        {
+            lock (TestRunLock)
+            {
+                if (_currentTestRun == null)
+                {
+                    return Fail("no_test_run", "No Unity test run has been started");
+                }
+
+                var requestedId = Get(query, "runId", string.Empty);
+                if (!string.IsNullOrWhiteSpace(requestedId) && !string.Equals(requestedId, _currentTestRun.Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    return Fail("test_run_not_found", $"Test run '{requestedId}' is not the current run");
+                }
+
+                return Ok(TestRunPayload(_currentTestRun));
+            }
+        }
+
+        private static Dictionary<string, object> GetComponentField(Dictionary<string, string> query)
+        {
+            if (!TryResolveComponentProperty(query, out var component, out var property, out var error))
+            {
+                return Fail("component_field_error", error);
+            }
+
+            return Ok(new Dictionary<string, object>
+            {
+                { "gameObject", GameObjectSummary(component.gameObject) },
+                { "componentType", component.GetType().FullName },
+                { "propertyPath", property.propertyPath },
+                { "propertyType", property.propertyType.ToString() },
+                { "value", SerializedValue(property) }
+            });
+        }
+
+        private static Dictionary<string, object> SetComponentField(Dictionary<string, string> query)
+        {
+            if (!TryResolveComponentProperty(query, out var component, out var property, out var error))
+            {
+                return Fail("component_field_error", error);
+            }
+
+            if (!TryGetJsonValue(query, "valueJson", "value", out var rawValue, out var parsedValue, out error))
+            {
+                return Fail("invalid_value", error);
+            }
+
+            var serialized = property.serializedObject;
+            Undo.RecordObject(component, "Codex MCP Set Component Field");
+            if (!TryAssignSerializedProperty(property, parsedValue, out error))
+            {
+                return Fail("unsupported_property_write", error);
+            }
+
+            serialized.ApplyModifiedProperties();
+            EditorUtility.SetDirty(component);
+            if (!EditorApplication.isPlaying && component.gameObject.scene.IsValid())
+            {
+                EditorSceneManager.MarkSceneDirty(component.gameObject.scene);
+            }
+
+            return Ok(new Dictionary<string, object>
+            {
+                { "gameObject", GameObjectSummary(component.gameObject) },
+                { "componentType", component.GetType().FullName },
+                { "propertyPath", property.propertyPath },
+                { "rawValue", rawValue },
+                { "value", SerializedValue(property) }
+            });
+        }
+
+        private static Dictionary<string, object> SendKeyboardInput(Dictionary<string, string> query)
+        {
+            var key = Get(query, "key", string.Empty);
+            if (string.IsNullOrWhiteSpace(key) || !Enum.TryParse(key, true, out KeyCode keyCode))
+            {
+                return Fail("invalid_key", $"Unknown Unity KeyCode '{key}'");
+            }
+
+            var eventType = Get(query, "eventType", "press").Trim().ToLowerInvariant();
+            var character = Get(query, "character", string.Empty);
+            var gameView = GetGameViewWindow();
+            if (gameView == null)
+            {
+                return Fail("game_view_unavailable", "Unity Game view is not available");
+            }
+
+            FocusWindow(gameView);
+            switch (eventType)
+            {
+                case "down":
+                    SendGameViewEvent(gameView, BuildKeyEvent(EventType.KeyDown, keyCode, character));
+                    break;
+                case "up":
+                    SendGameViewEvent(gameView, BuildKeyEvent(EventType.KeyUp, keyCode, character));
+                    break;
+                default:
+                    SendGameViewEvent(gameView, BuildKeyEvent(EventType.KeyDown, keyCode, character));
+                    SendGameViewEvent(gameView, BuildKeyEvent(EventType.KeyUp, keyCode, character));
+                    break;
+            }
+
+            return Ok(new Dictionary<string, object>
+            {
+                { "key", keyCode.ToString() },
+                { "eventType", eventType }
+            });
+        }
+
+        private static Dictionary<string, object> SendMouseInput(Dictionary<string, string> query)
+        {
+            var gameView = GetGameViewWindow();
+            if (gameView == null)
+            {
+                return Fail("game_view_unavailable", "Unity Game view is not available");
+            }
+
+            var x = Float(query, "x", float.NaN);
+            var y = Float(query, "y", float.NaN);
+            if (float.IsNaN(x) || float.IsNaN(y))
+            {
+                return Fail("mouse_position_required", "x and y are required");
+            }
+
+            var button = Int(query, "button", 0);
+            var eventType = Get(query, "eventType", "click").Trim().ToLowerInvariant();
+            var guiPoint = ScreenToGameViewPoint(gameView, new Vector2(x, y));
+
+            FocusWindow(gameView);
+            switch (eventType)
+            {
+                case "move":
+                    SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseMove, guiPoint, button));
+                    break;
+                case "down":
+                    SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseDown, guiPoint, button));
+                    break;
+                case "up":
+                    SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseUp, guiPoint, button));
+                    break;
+                default:
+                    SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseDown, guiPoint, button));
+                    SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseUp, guiPoint, button));
+                    break;
+            }
+
+            return Ok(new Dictionary<string, object>
+            {
+                { "eventType", eventType },
+                { "button", button },
+                { "screenPosition", Vec2(new Vector2(x, y)) },
+                { "gameViewPosition", Vec2(guiPoint) }
+            });
+        }
+
+        private static Dictionary<string, object> ClickUiElement(Dictionary<string, string> query)
+        {
+            var go = ResolveGameObject(query);
+            if (go == null)
+            {
+                return Fail("not_found", "UI GameObject not found");
+            }
+
+            var rectTransform = go.GetComponent<RectTransform>();
+            if (rectTransform == null)
+            {
+                return Fail("not_ui_element", $"GameObject '{go.name}' does not have a RectTransform");
+            }
+
+            var screenPoint = RectTransformScreenPoint(rectTransform);
+            var mouseQuery = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "x", screenPoint.x.ToString("R", CultureInfo.InvariantCulture) },
+                { "y", screenPoint.y.ToString("R", CultureInfo.InvariantCulture) },
+                { "button", Get(query, "button", "0") },
+                { "eventType", "click" }
+            };
+
+            var clickResult = SendMouseInput(mouseQuery);
+            if (!IsOk(clickResult))
+            {
+                return clickResult;
+            }
+
+            var data = ObjectDict(clickResult, "data") ?? new Dictionary<string, object>();
+            data["gameObject"] = GameObjectSummary(go);
+            return Ok(data);
+        }
+
+        private static Dictionary<string, object> WaitForObjectCondition(Dictionary<string, string> query)
+        {
+            var shouldExist = Bool(query, "exists", true);
+            var go = ResolveGameObject(query);
+            var exists = go != null;
+            if (exists == shouldExist)
+            {
+                return Ok(new Dictionary<string, object>
+                {
+                    { "exists", exists },
+                    { "gameObject", go == null ? null : GameObjectSummary(go) }
+                });
+            }
+
+            return Fail("wait_pending", "Object existence condition has not been met yet");
+        }
+
+        private static Dictionary<string, object> WaitForSceneCondition(Dictionary<string, string> query)
+        {
+            var scene = SceneManager.GetActiveScene();
+            var expectedName = Get(query, "sceneName", string.Empty);
+            var expectedPath = Get(query, "scenePath", string.Empty);
+            var match = true;
+
+            if (!string.IsNullOrWhiteSpace(expectedName))
+            {
+                match &= string.Equals(scene.name, expectedName, StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (!string.IsNullOrWhiteSpace(expectedPath))
+            {
+                match &= string.Equals(scene.path, expectedPath, StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (match)
+            {
+                return Ok(new Dictionary<string, object>
+                {
+                    { "scene", scene.name },
+                    { "path", scene.path },
+                    { "isLoaded", scene.isLoaded }
+                });
+            }
+
+            return Fail("wait_pending", $"Active scene is '{scene.name}'");
+        }
+
+        private static Dictionary<string, object> WaitForPlayModeCondition(Dictionary<string, string> query)
+        {
+            var expectedPlaying = Bool(query, "isPlaying", true);
+            var expectedPaused = query.ContainsKey("isPaused") ? Bool(query, "isPaused", false) : EditorApplication.isPaused;
+
+            if (EditorApplication.isPlaying == expectedPlaying &&
+                (!query.ContainsKey("isPaused") || EditorApplication.isPaused == expectedPaused))
+            {
+                return Ok(PlayStatePayload(false));
+            }
+
+            return Fail("wait_pending", "Play mode state has not reached the requested value yet");
+        }
+
+        private static Dictionary<string, object> WaitForLogCondition(Dictionary<string, string> query)
+        {
+            var text = Get(query, "text", string.Empty);
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return Fail("text_required", "text is required");
+            }
+
+            var type = Get(query, "type", string.Empty);
+            var sinceSeconds = Float(query, "sinceSeconds", 60f);
+            var cutoff = DateTime.UtcNow.AddSeconds(-Math.Max(0.1f, sinceSeconds));
+            RuntimeLogEntry match = null;
+
+            lock (RecentLogsLock)
+            {
+                for (var i = RecentLogs.Count - 1; i >= 0; i--)
+                {
+                    var entry = RecentLogs[i];
+                    if (entry.TimestampUtc < cutoff)
+                    {
+                        break;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(type) && !string.Equals(entry.Type, type, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (entry.Message.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        match = entry;
+                        break;
+                    }
+                }
+            }
+
+            if (match != null)
+            {
+                return Ok(RuntimeLogPayload(match));
+            }
+
+            return Fail("wait_pending", $"Log containing '{text}' has not been observed yet");
+        }
+
+        private static Dictionary<string, object> WaitForComponentFieldCondition(Dictionary<string, string> query)
+        {
+            if (!TryResolveComponentProperty(query, out var component, out var property, out var error))
+            {
+                return Fail("component_field_error", error);
+            }
+
+            if (!TryGetJsonValue(query, "expectedJson", "expected", out var rawExpected, out var expected, out error))
+            {
+                return Fail("invalid_expected", error);
+            }
+
+            var actual = SerializedValue(property);
+            var comparison = Get(query, "comparison", "equals").Trim().ToLowerInvariant();
+            if (MatchesComparison(actual, expected, comparison))
+            {
+                return Ok(new Dictionary<string, object>
+                {
+                    { "gameObject", GameObjectSummary(component.gameObject) },
+                    { "componentType", component.GetType().FullName },
+                    { "propertyPath", property.propertyPath },
+                    { "comparison", comparison },
+                    { "expected", expected },
+                    { "rawExpected", rawExpected },
+                    { "actual", actual }
+                });
+            }
+
+            return Fail("wait_pending", $"Component field '{property.propertyPath}' has not matched comparison '{comparison}' yet");
+        }
+
+        private static Dictionary<string, object> WaitForTestsCondition(Dictionary<string, string> query)
+        {
+            lock (TestRunLock)
+            {
+                if (_currentTestRun == null)
+                {
+                    return Fail("no_test_run", "No Unity test run has been started");
+                }
+
+                if (!_currentTestRun.IsComplete)
+                {
+                    return Fail("wait_pending", $"Unity test run '{_currentTestRun.Id}' is still running");
+                }
+
+                if (Bool(query, "requireSuccess", true) && _currentTestRun.FailedCount > 0)
+                {
+                    return Fail("tests_failed", $"{_currentTestRun.FailedCount} Unity tests failed");
+                }
+
+                return Ok(TestRunPayload(_currentTestRun));
+            }
         }
 
         private static Dictionary<string, object> ReadConsole(Dictionary<string, string> query)
@@ -1806,6 +2412,13 @@ namespace CodexUnityMcp
             return value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase) || value.Equals("yes", StringComparison.OrdinalIgnoreCase);
         }
 
+        private static float Float(Dictionary<string, string> query, string key, float fallback)
+        {
+            return query.TryGetValue(key, out var value) && float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+                ? parsed
+                : fallback;
+        }
+
         private static bool TryVector3(Dictionary<string, string> query, string key, out Vector3 value)
         {
             value = default;
@@ -1849,6 +2462,376 @@ namespace CodexUnityMcp
         private static List<object> QuaternionValue(Quaternion q)
         {
             return new List<object> { q.x, q.y, q.z, q.w };
+        }
+
+        private static string[] SplitCsv(string value)
+        {
+            var parts = value.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 0; i < parts.Length; i++)
+            {
+                parts[i] = parts[i].Trim();
+            }
+
+            return parts;
+        }
+
+        private static bool TryResolveComponentProperty(
+            Dictionary<string, string> query,
+            out Component component,
+            out SerializedProperty property,
+            out string error)
+        {
+            component = null;
+            property = null;
+            error = null;
+
+            var go = ResolveGameObject(query);
+            if (go == null)
+            {
+                error = "GameObject not found";
+                return false;
+            }
+
+            var componentTypeName = Get(query, "componentType", string.Empty);
+            if (!TryResolveComponentType(componentTypeName, out var componentType, out error))
+            {
+                return false;
+            }
+
+            var componentIndex = Int(query, "componentIndex", 0);
+            var matches = new List<Component>();
+            foreach (var candidate in go.GetComponents<Component>())
+            {
+                if (candidate != null && componentType.IsAssignableFrom(candidate.GetType()))
+                {
+                    matches.Add(candidate);
+                }
+            }
+
+            if (matches.Count == 0)
+            {
+                error = $"GameObject '{go.name}' does not have component {componentType.FullName}";
+                return false;
+            }
+
+            if (componentIndex < 0 || componentIndex >= matches.Count)
+            {
+                error = $"componentIndex {componentIndex} is out of range for {matches.Count} matching components";
+                return false;
+            }
+
+            var propertyPath = Get(query, "propertyPath", string.Empty);
+            if (string.IsNullOrWhiteSpace(propertyPath))
+            {
+                error = "propertyPath is required";
+                return false;
+            }
+
+            component = matches[componentIndex];
+            var serialized = new SerializedObject(component);
+            property = serialized.FindProperty(propertyPath);
+            if (property == null)
+            {
+                error = $"Property '{propertyPath}' was not found on component {component.GetType().FullName}";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryGetJsonValue(
+            Dictionary<string, string> query,
+            string jsonKey,
+            string rawKey,
+            out string rawValue,
+            out object parsedValue,
+            out string error)
+        {
+            parsedValue = null;
+            error = null;
+            rawValue = string.Empty;
+
+            if (query.TryGetValue(jsonKey, out rawValue) && !string.IsNullOrWhiteSpace(rawValue))
+            {
+                try
+                {
+                    parsedValue = MiniJson.Parse(rawValue);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    error = ex.Message;
+                    return false;
+                }
+            }
+
+            if (query.TryGetValue(rawKey, out rawValue))
+            {
+                parsedValue = rawValue;
+                return true;
+            }
+
+            error = $"{jsonKey} or {rawKey} is required";
+            return false;
+        }
+
+        private static bool TryAssignSerializedProperty(SerializedProperty property, object value, out string error)
+        {
+            error = null;
+
+            switch (property.propertyType)
+            {
+                case SerializedPropertyType.Integer:
+                    property.intValue = Convert.ToInt32(ToDouble(value), CultureInfo.InvariantCulture);
+                    return true;
+                case SerializedPropertyType.Boolean:
+                    property.boolValue = ToBool(value);
+                    return true;
+                case SerializedPropertyType.Float:
+                    property.floatValue = (float)ToDouble(value);
+                    return true;
+                case SerializedPropertyType.String:
+                    property.stringValue = value == null ? string.Empty : Convert.ToString(value, CultureInfo.InvariantCulture);
+                    return true;
+                case SerializedPropertyType.LayerMask:
+                    property.intValue = Convert.ToInt32(ToDouble(value), CultureInfo.InvariantCulture);
+                    return true;
+                case SerializedPropertyType.Enum:
+                    if (value is string text)
+                    {
+                        for (var i = 0; i < property.enumDisplayNames.Length; i++)
+                        {
+                            if (string.Equals(property.enumDisplayNames[i], text, StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(property.enumNames[i], text, StringComparison.OrdinalIgnoreCase))
+                            {
+                                property.enumValueIndex = i;
+                                return true;
+                            }
+                        }
+                    }
+
+                    property.enumValueIndex = Convert.ToInt32(ToDouble(value), CultureInfo.InvariantCulture);
+                    return true;
+                case SerializedPropertyType.Color:
+                    property.colorValue = ToColor(value);
+                    return true;
+                case SerializedPropertyType.Vector2:
+                    property.vector2Value = ToVector2(value);
+                    return true;
+                case SerializedPropertyType.Vector3:
+                    property.vector3Value = ToVector3(value);
+                    return true;
+                case SerializedPropertyType.Vector4:
+                    property.vector4Value = ToVector4(value);
+                    return true;
+                case SerializedPropertyType.Quaternion:
+                    property.quaternionValue = ToQuaternion(value);
+                    return true;
+                default:
+                    error = $"SerializedPropertyType.{property.propertyType} is not supported for writes yet";
+                    return false;
+            }
+        }
+
+        private static double ToDouble(object value)
+        {
+            switch (value)
+            {
+                case double number:
+                    return number;
+                case long integer:
+                    return integer;
+                case int intValue:
+                    return intValue;
+                case float floatValue:
+                    return floatValue;
+                case decimal decimalValue:
+                    return (double)decimalValue;
+                default:
+                    return Convert.ToDouble(value, CultureInfo.InvariantCulture);
+            }
+        }
+
+        private static bool ToBool(object value)
+        {
+            switch (value)
+            {
+                case bool boolean:
+                    return boolean;
+                case string text:
+                    return text == "1" || text.Equals("true", StringComparison.OrdinalIgnoreCase) || text.Equals("yes", StringComparison.OrdinalIgnoreCase);
+                default:
+                    return Convert.ToBoolean(value, CultureInfo.InvariantCulture);
+            }
+        }
+
+        private static IList ToListValue(object value, int requiredCount, string typeName)
+        {
+            var list = value as IList;
+            if (list == null || list.Count < requiredCount)
+            {
+                throw new InvalidOperationException($"{typeName} expects an array with {requiredCount} numeric values");
+            }
+
+            return list;
+        }
+
+        private static Vector2 ToVector2(object value)
+        {
+            var list = ToListValue(value, 2, "Vector2");
+            return new Vector2((float)ToDouble(list[0]), (float)ToDouble(list[1]));
+        }
+
+        private static Vector3 ToVector3(object value)
+        {
+            var list = ToListValue(value, 3, "Vector3");
+            return new Vector3((float)ToDouble(list[0]), (float)ToDouble(list[1]), (float)ToDouble(list[2]));
+        }
+
+        private static Vector4 ToVector4(object value)
+        {
+            var list = ToListValue(value, 4, "Vector4");
+            return new Vector4((float)ToDouble(list[0]), (float)ToDouble(list[1]), (float)ToDouble(list[2]), (float)ToDouble(list[3]));
+        }
+
+        private static Quaternion ToQuaternion(object value)
+        {
+            var list = ToListValue(value, 4, "Quaternion");
+            return new Quaternion((float)ToDouble(list[0]), (float)ToDouble(list[1]), (float)ToDouble(list[2]), (float)ToDouble(list[3]));
+        }
+
+        private static Color ToColor(object value)
+        {
+            var v = ToVector4(value);
+            return new Color(v.x, v.y, v.z, v.w);
+        }
+
+        private static EditorWindow GetGameViewWindow()
+        {
+            var type = Type.GetType("UnityEditor.GameView,UnityEditor");
+            return type == null ? null : EditorWindow.GetWindow(type);
+        }
+
+        private static void FocusWindow(EditorWindow window)
+        {
+            window.Show();
+            window.Focus();
+            window.Repaint();
+        }
+
+        private static Event BuildKeyEvent(EventType eventType, KeyCode keyCode, string character)
+        {
+            var evt = new Event
+            {
+                type = eventType,
+                keyCode = keyCode
+            };
+
+            if (!string.IsNullOrEmpty(character))
+            {
+                evt.character = character[0];
+            }
+
+            return evt;
+        }
+
+        private static Event BuildMouseEvent(EventType eventType, Vector2 guiPoint, int button)
+        {
+            return new Event
+            {
+                type = eventType,
+                button = button,
+                mousePosition = guiPoint,
+                clickCount = eventType == EventType.MouseDown || eventType == EventType.MouseUp ? 1 : 0
+            };
+        }
+
+        private static void SendGameViewEvent(EditorWindow gameView, Event evt)
+        {
+            gameView.SendEvent(evt);
+            gameView.Repaint();
+        }
+
+        private static Vector2 ScreenToGameViewPoint(EditorWindow gameView, Vector2 screenPoint)
+        {
+            return new Vector2(screenPoint.x, gameView.position.height - screenPoint.y);
+        }
+
+        private static Vector2 RectTransformScreenPoint(RectTransform rectTransform)
+        {
+            var canvas = rectTransform.GetComponentInParent<Canvas>();
+            var camera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay
+                ? (canvas.worldCamera != null ? canvas.worldCamera : Camera.main)
+                : null;
+            var worldCenter = rectTransform.TransformPoint(rectTransform.rect.center);
+            return RectTransformUtility.WorldToScreenPoint(camera, worldCenter);
+        }
+
+        private static void CaptureRuntimeLog(string condition, string stackTrace, LogType type)
+        {
+            lock (RecentLogsLock)
+            {
+                RecentLogs.Add(new RuntimeLogEntry
+                {
+                    TimestampUtc = DateTime.UtcNow,
+                    Type = type.ToString(),
+                    Message = condition ?? string.Empty,
+                    StackTrace = stackTrace ?? string.Empty
+                });
+
+                if (RecentLogs.Count > MaxRecentLogs)
+                {
+                    RecentLogs.RemoveRange(0, RecentLogs.Count - MaxRecentLogs);
+                }
+            }
+        }
+
+        private static Dictionary<string, object> RuntimeLogPayload(RuntimeLogEntry entry)
+        {
+            return new Dictionary<string, object>
+            {
+                { "timeUtc", entry.TimestampUtc.ToString("o", CultureInfo.InvariantCulture) },
+                { "type", entry.Type },
+                { "message", entry.Message },
+                { "stackTrace", entry.StackTrace }
+            };
+        }
+
+        private static bool MatchesComparison(object actual, object expected, string comparison)
+        {
+            switch (comparison)
+            {
+                case "not_equals":
+                case "not-equals":
+                    return MiniJson.Serialize(actual) != MiniJson.Serialize(expected);
+                case "contains":
+                    return Convert.ToString(actual, CultureInfo.InvariantCulture)
+                        .IndexOf(Convert.ToString(expected, CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase) >= 0;
+                case "greater":
+                    return ToDouble(actual) > ToDouble(expected);
+                case "less":
+                    return ToDouble(actual) < ToDouble(expected);
+                default:
+                    return MiniJson.Serialize(actual) == MiniJson.Serialize(expected);
+            }
+        }
+
+        private static Dictionary<string, object> TestRunPayload(TestRunState run)
+        {
+            return new Dictionary<string, object>
+            {
+                { "runId", run.Id },
+                { "mode", run.Mode },
+                { "status", run.Status },
+                { "startedUtc", run.StartedUtc.ToString("o", CultureInfo.InvariantCulture) },
+                { "finishedUtc", run.FinishedUtc.HasValue ? run.FinishedUtc.Value.ToString("o", CultureInfo.InvariantCulture) : null },
+                { "totalCount", run.TotalCount },
+                { "passedCount", run.PassedCount },
+                { "failedCount", run.FailedCount },
+                { "skippedCount", run.SkippedCount },
+                { "currentTest", run.CurrentTest },
+                { "results", run.Results }
+            };
         }
 
         private static void AddCorsHeaders(HttpListenerResponse response)
@@ -1900,6 +2883,118 @@ namespace CodexUnityMcp
             public string Layer { get; set; }
             public Dictionary<string, object> TransformSignature { get; set; }
             public List<object> ComponentsSignature { get; set; }
+        }
+
+        private sealed class RuntimeLogEntry
+        {
+            public DateTime TimestampUtc { get; set; }
+            public string Type { get; set; }
+            public string Message { get; set; }
+            public string StackTrace { get; set; }
+        }
+
+        private sealed class TestRunState
+        {
+            public string Id { get; set; }
+            public string Mode { get; set; }
+            public string Status { get; set; }
+            public DateTime StartedUtc { get; set; }
+            public DateTime? FinishedUtc { get; set; }
+            public int TotalCount { get; set; }
+            public int PassedCount { get; set; }
+            public int FailedCount { get; set; }
+            public int SkippedCount { get; set; }
+            public string CurrentTest { get; set; }
+            public bool IsComplete { get; set; }
+            public TestRunnerApi Api { get; set; }
+            public CodexTestCallbacks Callbacks { get; set; }
+            public List<object> Results { get; } = new List<object>();
+        }
+
+        private sealed class CodexTestCallbacks : ICallbacks
+        {
+            private readonly TestRunState _run;
+
+            public CodexTestCallbacks(TestRunState run)
+            {
+                _run = run;
+            }
+
+            public void RunStarted(ITestAdaptor testsToRun)
+            {
+                _run.Status = "running";
+                _run.TotalCount = CountTests(testsToRun);
+            }
+
+            public void RunFinished(ITestResultAdaptor result)
+            {
+                _run.Status = _run.FailedCount > 0 ? "failed" : "passed";
+                _run.FinishedUtc = DateTime.UtcNow;
+                _run.IsComplete = true;
+            }
+
+            public void TestStarted(ITestAdaptor test)
+            {
+                if (test == null || test.IsSuite)
+                {
+                    return;
+                }
+
+                _run.CurrentTest = test.FullName;
+            }
+
+            public void TestFinished(ITestResultAdaptor result)
+            {
+                if (result == null || result.Test == null || result.Test.IsSuite)
+                {
+                    return;
+                }
+
+                var status = result.TestStatus.ToString();
+                switch (status.ToLowerInvariant())
+                {
+                    case "passed":
+                        _run.PassedCount++;
+                        break;
+                    case "failed":
+                        _run.FailedCount++;
+                        break;
+                    default:
+                        _run.SkippedCount++;
+                        break;
+                }
+
+                _run.Results.Add(new Dictionary<string, object>
+                {
+                    { "name", result.Name },
+                    { "fullName", result.FullName },
+                    { "status", status },
+                    { "duration", result.Duration },
+                    { "message", result.Message },
+                    { "stackTrace", result.StackTrace }
+                });
+            }
+
+            private static int CountTests(ITestAdaptor test)
+            {
+                if (test == null)
+                {
+                    return 0;
+                }
+
+                if (!test.IsSuite)
+                {
+                    return 1;
+                }
+
+                var count = 0;
+                foreach (var child in test.Children)
+                {
+                    count += CountTests(child);
+                }
+
+                return count;
+            }
         }
     }
 

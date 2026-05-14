@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from .unity_client import UnityClient
+from .unity_client import UnityBridgeError, UnityClient
 
 
 mcp = FastMCP("codex-unity-mcp")
@@ -46,6 +47,64 @@ def normalize_batch_commands(commands: list[dict[str, Any]]) -> list[dict[str, A
             }
         normalized.append(item)
     return normalized
+
+
+def component_target_params(
+    *,
+    instance_id: int | None = None,
+    name: str | None = None,
+    path: str | None = None,
+    component_type: str | None = None,
+    component_index: int | None = None,
+    property_path: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": instance_id,
+        "name": name,
+        "path": path,
+        "componentType": component_type,
+        "componentIndex": component_index,
+        "propertyPath": property_path,
+    }
+
+
+def poll_bridge(
+    fetch: Any,
+    predicate: Any,
+    timeout_ms: int,
+    poll_ms: int,
+    reconnect_ok: bool = False,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + max(0.001, timeout_ms / 1000.0)
+    last_payload: dict[str, Any] | None = None
+    last_error: str | None = None
+
+    while time.monotonic() < deadline:
+        try:
+            payload = fetch()
+            last_payload = payload
+            if predicate(payload):
+                return payload
+        except UnityBridgeError as exc:
+            last_error = str(exc)
+            if not reconnect_ok:
+                raise
+
+        time.sleep(max(0.01, poll_ms / 1000.0))
+
+    if last_payload is not None:
+        return {
+            "ok": False,
+            "error": "wait_timeout",
+            "message": "Timed out waiting for Unity state change",
+            "last": last_payload,
+        }
+
+    return {
+        "ok": False,
+        "error": "wait_timeout",
+        "message": last_error or "Timed out waiting for Unity state change",
+    }
 
 
 @mcp.resource("unity://editor/state")
@@ -369,6 +428,304 @@ def safe_batch(
             label=label,
         )
     )
+
+
+@mcp.tool()
+def enter_play_mode() -> str:
+    """Request Unity to enter Play Mode."""
+    return pretty(client.get("/play/enter"))
+
+
+@mcp.tool()
+def exit_play_mode() -> str:
+    """Request Unity to exit Play Mode."""
+    return pretty(client.get("/play/exit"))
+
+
+@mcp.tool()
+def get_play_state() -> str:
+    """Return the current Unity Play Mode state."""
+    return pretty(client.get("/play/state"))
+
+
+@mcp.tool()
+def invoke_menu_item(menu_path: str) -> str:
+    """Invoke a Unity editor menu item by its full path.
+
+    Args:
+        menu_path: For example Window/General/Test Runner.
+    """
+    return pretty(client.get("/menu/invoke", menuPath=menu_path))
+
+
+@mcp.tool()
+def run_unity_tests(
+    mode: str = "editmode",
+    assembly_names: list[str] | None = None,
+    test_names: list[str] | None = None,
+    group_names: list[str] | None = None,
+) -> str:
+    """Start a Unity Test Runner execution.
+
+    Args:
+        mode: editmode, playmode, or all.
+        assembly_names: Optional assembly filters.
+        test_names: Optional fully qualified test names.
+        group_names: Optional category/group filters.
+    """
+    return pretty(
+        client.get(
+            "/tests/run",
+            mode=mode,
+            assemblyNames=assembly_names,
+            testNames=test_names,
+            groupNames=group_names,
+        )
+    )
+
+
+@mcp.tool()
+def get_unity_test_status(run_id: str | None = None) -> str:
+    """Return the status of the current Unity test run."""
+    return pretty(client.get("/tests/status", runId=run_id))
+
+
+@mcp.tool()
+def get_component_field(
+    component_type: str,
+    property_path: str,
+    instance_id: int | None = None,
+    name: str | None = None,
+    path: str | None = None,
+    component_index: int = 0,
+) -> str:
+    """Read one serialized field from a component.
+
+    Args:
+        component_type: Component short name or full type name.
+        property_path: Serialized property path, such as m_Text or m_Value.
+        instance_id: Unity instance id from hierarchy/find results.
+        name: Exact GameObject name.
+        path: Hierarchy path such as Canvas/Button.
+        component_index: Which matching component to use when several exist.
+    """
+    return pretty(
+        client.get(
+            "/runtime/component-field",
+            **component_target_params(
+                instance_id=instance_id,
+                name=name,
+                path=path,
+                component_type=component_type,
+                component_index=component_index,
+                property_path=property_path,
+            ),
+        )
+    )
+
+
+@mcp.tool()
+def set_component_field(
+    component_type: str,
+    property_path: str,
+    value: Any,
+    instance_id: int | None = None,
+    name: str | None = None,
+    path: str | None = None,
+    component_index: int = 0,
+) -> str:
+    """Write one serialized field on a component.
+
+    Args:
+        component_type: Component short name or full type name.
+        property_path: Serialized property path.
+        value: JSON-compatible target value.
+        instance_id: Unity instance id from hierarchy/find results.
+        name: Exact GameObject name.
+        path: Hierarchy path such as Canvas/Button.
+        component_index: Which matching component to use when several exist.
+    """
+    return pretty(
+        client.get(
+            "/runtime/set-component-field",
+            **component_target_params(
+                instance_id=instance_id,
+                name=name,
+                path=path,
+                component_type=component_type,
+                component_index=component_index,
+                property_path=property_path,
+            ),
+            valueJson=json.dumps(value, ensure_ascii=False),
+        )
+    )
+
+
+@mcp.tool()
+def send_keyboard_input(key: str, event_type: str = "press", character: str | None = None) -> str:
+    """Send a keyboard event to the Unity Game view.
+
+    Args:
+        key: Unity KeyCode name, such as Space or A.
+        event_type: press, down, or up.
+        character: Optional character payload for text input.
+    """
+    return pretty(client.get("/input/keyboard", key=key, eventType=event_type, character=character))
+
+
+@mcp.tool()
+def send_mouse_input(x: float, y: float, event_type: str = "click", button: int = 0) -> str:
+    """Send a mouse event to the Unity Game view.
+
+    Args:
+        x: Screen-space X coordinate in pixels.
+        y: Screen-space Y coordinate in pixels from the bottom of the Game view.
+        event_type: click, down, up, or move.
+        button: Mouse button index.
+    """
+    return pretty(client.get("/input/mouse", x=x, y=y, eventType=event_type, button=button))
+
+
+@mcp.tool()
+def click_ui_element(
+    instance_id: int | None = None,
+    name: str | None = None,
+    path: str | None = None,
+    button: int = 0,
+) -> str:
+    """Click the center of a UI RectTransform in the Unity Game view."""
+    return pretty(client.get("/input/click-ui", id=instance_id, name=name, path=path, button=button))
+
+
+@mcp.tool()
+def wait_for_object(
+    instance_id: int | None = None,
+    name: str | None = None,
+    path: str | None = None,
+    exists: bool = True,
+    timeout_ms: int = 5000,
+    poll_ms: int = 100,
+) -> str:
+    """Wait for a scene object to appear or disappear."""
+    return pretty(
+        client.get(
+            "/wait/object",
+            id=instance_id,
+            name=name,
+            path=path,
+            exists=exists,
+            timeoutMs=timeout_ms,
+            pollMs=poll_ms,
+        )
+    )
+
+
+@mcp.tool()
+def wait_for_log(
+    text: str,
+    log_type: str | None = None,
+    since_seconds: float = 60.0,
+    timeout_ms: int = 5000,
+    poll_ms: int = 100,
+) -> str:
+    """Wait for a Unity log entry containing the given text."""
+    return pretty(
+        client.get(
+            "/wait/log",
+            text=text,
+            type=log_type,
+            sinceSeconds=since_seconds,
+            timeoutMs=timeout_ms,
+            pollMs=poll_ms,
+        )
+    )
+
+
+@mcp.tool()
+def wait_for_scene(
+    scene_name: str | None = None,
+    scene_path: str | None = None,
+    timeout_ms: int = 5000,
+    poll_ms: int = 100,
+) -> str:
+    """Wait for the active scene to match the requested name or path."""
+    return pretty(
+        client.get(
+            "/wait/scene",
+            sceneName=scene_name,
+            scenePath=scene_path,
+            timeoutMs=timeout_ms,
+            pollMs=poll_ms,
+        )
+    )
+
+
+@mcp.tool()
+def wait_for_component_field(
+    component_type: str,
+    property_path: str,
+    expected: Any,
+    instance_id: int | None = None,
+    name: str | None = None,
+    path: str | None = None,
+    component_index: int = 0,
+    comparison: str = "equals",
+    timeout_ms: int = 5000,
+    poll_ms: int = 100,
+) -> str:
+    """Wait until a component field matches an expected value."""
+    return pretty(
+        client.get(
+            "/wait/component-field",
+            **component_target_params(
+                instance_id=instance_id,
+                name=name,
+                path=path,
+                component_type=component_type,
+                component_index=component_index,
+                property_path=property_path,
+            ),
+            expectedJson=json.dumps(expected, ensure_ascii=False),
+            comparison=comparison,
+            timeoutMs=timeout_ms,
+            pollMs=poll_ms,
+        )
+    )
+
+
+@mcp.tool()
+def wait_for_play_mode(
+    is_playing: bool = True,
+    is_paused: bool | None = None,
+    timeout_ms: int = 10000,
+    poll_ms: int = 100,
+) -> str:
+    """Wait for Unity Play Mode to reach the requested state."""
+    payload = poll_bridge(
+        lambda: client.get("/play/state"),
+        lambda result: result.get("ok")
+        and result.get("data", {}).get("isPlaying") == is_playing
+        and (is_paused is None or result.get("data", {}).get("isPaused") == is_paused),
+        timeout_ms=timeout_ms,
+        poll_ms=poll_ms,
+        reconnect_ok=True,
+    )
+    return pretty(payload)
+
+
+@mcp.tool()
+def wait_for_unity_tests(require_success: bool = True, timeout_ms: int = 60000, poll_ms: int = 250) -> str:
+    """Wait for the current Unity test run to finish."""
+    payload = poll_bridge(
+        lambda: client.get("/tests/status"),
+        lambda result: result.get("ok")
+        and result.get("data", {}).get("status") != "running"
+        and (not require_success or result.get("data", {}).get("failedCount", 0) == 0),
+        timeout_ms=timeout_ms,
+        poll_ms=poll_ms,
+        reconnect_ok=True,
+    )
+    return pretty(payload)
 
 
 @mcp.tool()
