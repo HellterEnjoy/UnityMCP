@@ -28,7 +28,7 @@ This is intentionally small. It is a stable base for expanding toward a Cursor-l
 4. Select:
 
    ```text
-   A:\Вопросы\UnityCodexMcp\unity-package\Packages\com.codex.unity-mcp\package.json
+   A:\UnityMCP\unity-package\Packages\com.codex.unity-mcp\package.json
    ```
 
 5. Unity should compile the package.
@@ -54,7 +54,7 @@ http://127.0.0.1:8765/scene/hierarchy?includeInactive=true&maxNodes=100
 From PowerShell:
 
 ```powershell
-cd A:\Вопросы\UnityCodexMcp\server
+cd A:\UnityMCP\server
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e .
@@ -68,7 +68,7 @@ The MCP server communicates over stdio, so it is normally launched by Codex or a
 See:
 
 ```text
-A:\Вопросы\UnityCodexMcp\examples\codex-mcp.example.json
+A:\UnityMCP\examples\codex-mcp.example.json
 ```
 
 If your MCP client does not support `cwd`, use the venv Python executable and module form:
@@ -77,7 +77,7 @@ If your MCP client does not support `cwd`, use the venv Python executable and mo
 {
   "mcpServers": {
     "codex-unity": {
-      "command": "A:\\Вопросы\\UnityCodexMcp\\server\\.venv\\Scripts\\python.exe",
+      "command": "A:\\UnityMCP\\server\\.venv\\Scripts\\python.exe",
       "args": ["-m", "codex_unity_mcp.server"],
       "env": {
         "UNITY_MCP_BRIDGE_URL": "http://127.0.0.1:8765"
