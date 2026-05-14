@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "codex-unity": {
+      "command": "python",
+      "args": [
+        "-m",
+        "codex_unity_mcp.server"
+      ],
+      "cwd": "A:\\Вопросы\\UnityCodexMcp\\server",
+      "env": {
+        "UNITY_MCP_BRIDGE_URL": "http://127.0.0.1:8765"
+      }
+    }
+  }
+}
