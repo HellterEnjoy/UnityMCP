@@ -67,7 +67,40 @@ python -m codex_unity_mcp.server
 
 The MCP server communicates over stdio, so it is normally launched by Codex or another MCP client, not manually.
 
-## Codex MCP Config Example
+## Codex App Setup
+
+The Unity bridge at `http://127.0.0.1:8765` is not an MCP server. Do not add that URL directly to
+Codex. Codex should launch the Python MCP server from this repository, and that server talks to the
+Unity bridge internally.
+
+From the repository root:
+
+```powershell
+.\scripts\install-codex-mcp.ps1
+```
+
+This creates `server\.venv`, installs the Python MCP server, and registers `codex-unity` with the
+Codex CLI/app.
+
+Equivalent manual setup:
+
+```powershell
+cd <path-to-this-repo>\server
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e .
+$python = (Resolve-Path .\.venv\Scripts\python.exe).Path
+codex mcp add codex-unity --env UNITY_MCP_BRIDGE_URL=http://127.0.0.1:8765 -- $python -m codex_unity_mcp.server
+```
+
+If you edit `~\.codex\config.toml` by hand, use the TOML form in:
+
+```text
+examples\codex-config.example.toml
+```
+
+Restart Codex after changing MCP configuration so the app reloads the server list.
+
+## Generic MCP Config Example
 
 See:
 

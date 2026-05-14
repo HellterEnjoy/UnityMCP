@@ -1,0 +1,7 @@
+[mcp_servers.codex-unity]
+enabled = true
+command = "<path-to-this-repo>\\server\\.venv\\Scripts\\python.exe"
+args = ["-m", "codex_unity_mcp.server"]
+
+[mcp_servers.codex-unity.env]
+UNITY_MCP_BRIDGE_URL = "http://127.0.0.1:8765"
