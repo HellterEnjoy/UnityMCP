@@ -28,12 +28,16 @@ This is intentionally small. It is a stable base for expanding toward a Cursor-l
 4. Select:
 
    ```text
-   unity-package\Packages\com.codex.unity-mcp\package.json
+   <path-to-this-repo>\unity-package\Packages\com.codex.unity-mcp\package.json
    ```
 
 5. Unity should compile the package.
-6. Use `Tools > Codex MCP Bridge > Status` to confirm it is running.
-7. If needed, use `Tools > Codex MCP Bridge > Start`.
+6. Use `Window > Codex MCP Bridge > Status` to confirm it is running.
+7. If needed, use `Window > Codex MCP Bridge > Start`.
+
+If `Window > Codex MCP Bridge` is missing, check that the package is listed in
+`Window > Package Manager` and that the Unity Console has no compile errors.
+Unity only creates the menu after the Editor script compiles successfully.
 
 The bridge listens only on:
 

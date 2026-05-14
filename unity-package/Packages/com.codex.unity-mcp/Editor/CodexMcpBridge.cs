@@ -36,7 +36,7 @@ namespace CodexUnityMcp
             EditorApplication.delayCall += StartServer;
         }
 
-        [MenuItem("Tools/Codex MCP Bridge/Start")]
+        [MenuItem("Window/Codex MCP Bridge/Start")]
         public static void StartServer()
         {
             if (_running)
@@ -67,7 +67,7 @@ namespace CodexUnityMcp
             }
         }
 
-        [MenuItem("Tools/Codex MCP Bridge/Stop")]
+        [MenuItem("Window/Codex MCP Bridge/Stop")]
         public static void StopServer()
         {
             _running = false;
@@ -86,12 +86,30 @@ namespace CodexUnityMcp
             Debug.Log("Codex MCP Bridge stopped");
         }
 
-        [MenuItem("Tools/Codex MCP Bridge/Status")]
+        [MenuItem("Window/Codex MCP Bridge/Status")]
         public static void LogStatus()
         {
             Debug.Log(_running
                 ? $"Codex MCP Bridge is running on http://{PrefixHost}:{_port}"
                 : "Codex MCP Bridge is stopped");
+        }
+
+        [MenuItem("Tools/Codex MCP Bridge/Start")]
+        private static void StartServerFromToolsMenu()
+        {
+            StartServer();
+        }
+
+        [MenuItem("Tools/Codex MCP Bridge/Stop")]
+        private static void StopServerFromToolsMenu()
+        {
+            StopServer();
+        }
+
+        [MenuItem("Tools/Codex MCP Bridge/Status")]
+        private static void LogStatusFromToolsMenu()
+        {
+            LogStatus();
         }
 
         private static void ListenLoop()
