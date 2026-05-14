@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "com.codex.unity-mcp": "https://github.com/HellterEnjoy/UnityMCP.git?path=/unity-package/Packages/com.codex.unity-mcp#main"
+  }
+}

@@ -4,6 +4,17 @@
   "displayName": "Codex Unity MCP Bridge",
   "description": "Local Unity Editor bridge for Codex MCP tools.",
   "unity": "2021.3",
+  "keywords": [
+    "codex",
+    "mcp",
+    "editor",
+    "automation"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HellterEnjoy/UnityMCP.git",
+    "directory": "unity-package/Packages/com.codex.unity-mcp"
+  },
   "author": {
     "name": "Codex"
   }

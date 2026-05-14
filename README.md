@@ -21,7 +21,48 @@ The project is split into two parts:
 
 This is intentionally small. It is a stable base for expanding toward a Cursor-like Unity workflow instead of a large collection of brittle commands.
 
-## Unity Setup
+## Unity Setup From Git
+
+1. Open your Unity project.
+2. Open `Window > Package Manager`.
+3. Click `+ > Add package from git URL...`.
+4. Enter:
+
+   ```text
+   https://github.com/HellterEnjoy/UnityMCP.git?path=/unity-package/Packages/com.codex.unity-mcp#main
+   ```
+
+5. Unity should download and compile the package.
+6. Use `Window > Codex MCP Bridge > Status` to confirm it is running.
+7. If needed, use `Window > Codex MCP Bridge > Start`.
+
+Equivalent `Packages/manifest.json` entry:
+
+```json
+{
+  "dependencies": {
+    "com.codex.unity-mcp": "https://github.com/HellterEnjoy/UnityMCP.git?path=/unity-package/Packages/com.codex.unity-mcp#main"
+  }
+}
+```
+
+The package lives in a repository subfolder, so the `?path=/unity-package/Packages/com.codex.unity-mcp`
+part is required. The `#main` revision keeps the dependency pointed at the main branch.
+
+## Updating The Unity Package
+
+Unity locks Git dependencies to a specific commit in `Packages/packages-lock.json`.
+To update to the latest `main` branch commit, use one of these options:
+
+- In Unity, run `Window > Codex MCP Bridge > Update Package From Git`.
+- In `Window > Package Manager`, select `Codex Unity MCP Bridge` and click `Update` if Unity shows one.
+- Use `+ > Add package from git URL...` again with the same URL.
+
+You do not need to remove and re-add the package.
+
+## Local Unity Setup For Development
+
+Use this only when you are editing this repository locally and want Unity to read the package directly from disk.
 
 1. Open your Unity project.
 2. Open `Window > Package Manager`.
@@ -33,8 +74,6 @@ This is intentionally small. It is a stable base for expanding toward a Cursor-l
    ```
 
 5. Unity should compile the package.
-6. Use `Window > Codex MCP Bridge > Status` to confirm it is running.
-7. If needed, use `Window > Codex MCP Bridge > Start`.
 
 If `Window > Codex MCP Bridge` is missing, check that the package is listed in
 `Window > Package Manager` and that the Unity Console has no compile errors.

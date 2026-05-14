@@ -10,6 +10,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEditor;
+using UnityEditor.PackageManager;
+using UnityEditor.PackageManager.Requests;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -24,12 +26,14 @@ namespace CodexUnityMcp
     {
         private const int DefaultPort = 8765;
         private const string PrefixHost = "127.0.0.1";
+        private const string GitPackageUrl = "https://github.com/HellterEnjoy/UnityMCP.git?path=/unity-package/Packages/com.codex.unity-mcp#main";
         private static readonly ConcurrentQueue<BridgeRequest> Requests = new ConcurrentQueue<BridgeRequest>();
 
         private static HttpListener _listener;
         private static Thread _listenerThread;
         private static volatile bool _running;
         private static int _port;
+        private static AddRequest _packageUpdateRequest;
 
         static CodexMcpBridge()
         {
@@ -96,6 +100,29 @@ namespace CodexUnityMcp
                 : "Codex MCP Bridge is stopped");
         }
 
+        [MenuItem("Window/Codex MCP Bridge/Update Package From Git")]
+        public static void UpdatePackageFromGit()
+        {
+            if (_packageUpdateRequest != null && !_packageUpdateRequest.IsCompleted)
+            {
+                Debug.Log("Codex MCP Bridge package update is already running");
+                return;
+            }
+
+            if (!EditorUtility.DisplayDialog(
+                    "Update Codex MCP Bridge",
+                    "This will ask Unity Package Manager to update com.codex.unity-mcp from the GitHub main branch.",
+                    "Update",
+                    "Cancel"))
+            {
+                return;
+            }
+
+            _packageUpdateRequest = Client.Add(GitPackageUrl);
+            EditorApplication.update += WatchPackageUpdate;
+            Debug.Log($"Updating Codex MCP Bridge package from {GitPackageUrl}");
+        }
+
         [MenuItem("Tools/Codex MCP Bridge/Start")]
         private static void StartServerFromToolsMenu()
         {
@@ -112,6 +139,32 @@ namespace CodexUnityMcp
         private static void LogStatusFromToolsMenu()
         {
             LogStatus();
+        }
+
+        [MenuItem("Tools/Codex MCP Bridge/Update Package From Git")]
+        private static void UpdatePackageFromGitToolsMenu()
+        {
+            UpdatePackageFromGit();
+        }
+
+        private static void WatchPackageUpdate()
+        {
+            if (_packageUpdateRequest == null || !_packageUpdateRequest.IsCompleted)
+            {
+                return;
+            }
+
+            EditorApplication.update -= WatchPackageUpdate;
+            if (_packageUpdateRequest.Status == StatusCode.Success)
+            {
+                Debug.Log($"Codex MCP Bridge package updated: {_packageUpdateRequest.Result.packageId}");
+            }
+            else
+            {
+                Debug.LogError($"Failed to update Codex MCP Bridge package: {_packageUpdateRequest.Error.message}");
+            }
+
+            _packageUpdateRequest = null;
         }
 
         private static void ListenLoop()
