@@ -257,6 +257,10 @@ namespace CodexUnityMcp
                     return DeleteGameObject(query);
                 case "/scene/duplicate-gameobject":
                     return DuplicateGameObject(query);
+                case "/scene/add-component":
+                    return AddComponentToGameObject(query);
+                case "/scene/remove-component":
+                    return RemoveComponentFromGameObject(query);
                 case "/console":
                     return ReadConsole(query);
                 case "/screenshot":
@@ -582,6 +586,102 @@ namespace CodexUnityMcp
             EditorSceneManager.MarkSceneDirty(duplicate.scene);
 
             return Ok(GameObjectDetails(duplicate, false));
+        }
+
+        private static Dictionary<string, object> AddComponentToGameObject(Dictionary<string, string> query)
+        {
+            var go = ResolveGameObject(query);
+            if (go == null)
+            {
+                return Fail("not_found", "GameObject not found");
+            }
+
+            var componentTypeName = Get(query, "componentType", string.Empty);
+            if (!TryResolveComponentType(componentTypeName, out var componentType, out var error))
+            {
+                return Fail("component_type_error", error);
+            }
+
+            if (typeof(Transform).IsAssignableFrom(componentType))
+            {
+                return Fail("cannot_add_transform", "Transform is created with every GameObject and cannot be added manually");
+            }
+
+            if (go.GetComponent(componentType) != null && !Bool(query, "allowMultiple", false))
+            {
+                return Fail("component_exists", $"GameObject already has component {componentType.FullName}. Pass allowMultiple=true to add another instance.");
+            }
+
+            Component component;
+            try
+            {
+                component = Undo.AddComponent(go, componentType);
+            }
+            catch (Exception ex)
+            {
+                return Fail("add_component_failed", ex.Message);
+            }
+
+            EditorUtility.SetDirty(go);
+            EditorSceneManager.MarkSceneDirty(go.scene);
+
+            return Ok(new Dictionary<string, object>
+            {
+                { "gameObject", GameObjectDetails(go, false) },
+                { "addedComponent", ComponentDetails(component, false) }
+            });
+        }
+
+        private static Dictionary<string, object> RemoveComponentFromGameObject(Dictionary<string, string> query)
+        {
+            var go = ResolveGameObject(query);
+            if (go == null)
+            {
+                return Fail("not_found", "GameObject not found");
+            }
+
+            var componentTypeName = Get(query, "componentType", string.Empty);
+            if (!TryResolveComponentType(componentTypeName, out var componentType, out var error))
+            {
+                return Fail("component_type_error", error);
+            }
+
+            if (typeof(Transform).IsAssignableFrom(componentType))
+            {
+                return Fail("cannot_remove_transform", "Transform cannot be removed from a GameObject");
+            }
+
+            var removeAll = Bool(query, "removeAll", false);
+            var removed = new List<object>();
+            foreach (var component in go.GetComponents<Component>())
+            {
+                if (component == null || !componentType.IsAssignableFrom(component.GetType()))
+                {
+                    continue;
+                }
+
+                removed.Add(ComponentDetails(component, false));
+                Undo.DestroyObjectImmediate(component);
+
+                if (!removeAll)
+                {
+                    break;
+                }
+            }
+
+            if (removed.Count == 0)
+            {
+                return Fail("component_not_found", $"GameObject does not have component {componentType.FullName}");
+            }
+
+            EditorUtility.SetDirty(go);
+            EditorSceneManager.MarkSceneDirty(go.scene);
+
+            return Ok(new Dictionary<string, object>
+            {
+                { "gameObject", GameObjectDetails(go, false) },
+                { "removedComponents", removed }
+            });
         }
 
         private static Dictionary<string, object> ReadConsole(Dictionary<string, string> query)
@@ -972,6 +1072,152 @@ namespace CodexUnityMcp
         private static bool HasParentQuery(Dictionary<string, string> query)
         {
             return query.ContainsKey("parentId") || query.ContainsKey("parentPath") || query.ContainsKey("parentName");
+        }
+
+        private static bool TryResolveComponentType(string componentTypeName, out Type componentType, out string error)
+        {
+            componentType = null;
+            error = null;
+
+            if (string.IsNullOrWhiteSpace(componentTypeName))
+            {
+                error = "componentType is required";
+                return false;
+            }
+
+            var direct = Type.GetType(componentTypeName, false);
+            if (direct != null)
+            {
+                return ValidateComponentType(direct, out componentType, out error);
+            }
+
+            var matches = new List<Type>();
+            var exactFullNameMatches = new List<Type>();
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                foreach (var type in GetAssemblyTypes(assembly))
+                {
+                    if (type == null || !typeof(Component).IsAssignableFrom(type) || type.IsAbstract)
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(type.FullName, componentTypeName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        exactFullNameMatches.Add(type);
+                    }
+                    else if (string.Equals(type.Name, componentTypeName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        matches.Add(type);
+                    }
+                }
+            }
+
+            if (exactFullNameMatches.Count == 1)
+            {
+                componentType = exactFullNameMatches[0];
+                return true;
+            }
+
+            if (exactFullNameMatches.Count > 1)
+            {
+                error = $"Ambiguous component type '{componentTypeName}': {TypeList(exactFullNameMatches)}";
+                return false;
+            }
+
+            if (matches.Count == 1)
+            {
+                componentType = matches[0];
+                return true;
+            }
+
+            var unityEngineName = $"UnityEngine.{componentTypeName}";
+            Type unityEngineMatch = null;
+            foreach (var match in matches)
+            {
+                if (string.Equals(match.FullName, unityEngineName, StringComparison.OrdinalIgnoreCase))
+                {
+                    unityEngineMatch = match;
+                    break;
+                }
+            }
+
+            if (unityEngineMatch != null)
+            {
+                componentType = unityEngineMatch;
+                return true;
+            }
+
+            if (matches.Count > 1)
+            {
+                error = $"Ambiguous component type '{componentTypeName}'. Use a full type name. Matches: {TypeList(matches)}";
+                return false;
+            }
+
+            error = $"Component type '{componentTypeName}' was not found";
+            return false;
+        }
+
+        private static bool ValidateComponentType(Type type, out Type componentType, out string error)
+        {
+            componentType = null;
+            error = null;
+
+            if (!typeof(Component).IsAssignableFrom(type))
+            {
+                error = $"{type.FullName} is not a UnityEngine.Component";
+                return false;
+            }
+
+            if (type.IsAbstract)
+            {
+                error = $"{type.FullName} is abstract and cannot be added";
+                return false;
+            }
+
+            componentType = type;
+            return true;
+        }
+
+        private static IEnumerable<Type> GetAssemblyTypes(Assembly assembly)
+        {
+            try
+            {
+                return assembly.GetTypes();
+            }
+            catch (ReflectionTypeLoadException ex)
+            {
+                var types = new List<Type>();
+                foreach (var type in ex.Types)
+                {
+                    if (type != null)
+                    {
+                        types.Add(type);
+                    }
+                }
+                return types;
+            }
+            catch
+            {
+                return new Type[0];
+            }
+        }
+
+        private static string TypeList(List<Type> types)
+        {
+            var names = new List<string>();
+            var count = Mathf.Min(types.Count, 8);
+            for (var i = 0; i < count; i++)
+            {
+                names.Add(types[i].FullName);
+            }
+
+            if (types.Count > count)
+            {
+                names.Add($"and {types.Count - count} more");
+            }
+
+            return string.Join(", ", names.ToArray());
         }
 
         private static void ApplyOptionalTransform(GameObject go, Dictionary<string, string> query)

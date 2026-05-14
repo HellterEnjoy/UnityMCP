@@ -17,6 +17,7 @@ The project is split into two parts:
 - Read recent Unity Console entries through Unity's internal reflection API.
 - Capture a screenshot from the Scene View or Main Camera.
 - Create, delete, and duplicate GameObjects with Undo support.
+- Add and remove GameObject components with Undo support.
 - Set a GameObject transform with Undo support.
 
 This is intentionally small. It is a stable base for expanding toward a Cursor-like Unity workflow instead of a large collection of brittle commands.
@@ -192,6 +193,8 @@ If your MCP client does not support `cwd`, use the venv Python executable and mo
 - `create_gameobject(name="GameObject", primitive_type="empty", parent_instance_id=None, parent_name=None, parent_path=None, position=None, rotation=None, scale=None)`
 - `delete_gameobject(instance_id=None, name=None, path=None)`
 - `duplicate_gameobject(instance_id=None, name=None, path=None, new_name=None, parent_instance_id=None, parent_name=None, parent_path=None, position=None, rotation=None, scale=None)`
+- `add_component(component_type, instance_id=None, name=None, path=None, allow_multiple=False)`
+- `remove_component(component_type, instance_id=None, name=None, path=None, remove_all=False)`
 - `read_console(count=50)`
 - `take_scene_screenshot(source="scene_view", include_image=False, max_resolution=512)`
 
@@ -210,9 +213,8 @@ If your MCP client does not support `cwd`, use the venv Python executable and mo
 
 ## Useful Next Extensions
 
-1. Add `add_component` and `remove_component`.
-2. Add safe serialized property writes.
-3. Add prefab-aware inspection and overrides.
-4. Add AssetDatabase search.
-5. Add play mode controls.
-6. Add test runner endpoints.
+1. Add safe serialized property writes.
+2. Add prefab-aware inspection and overrides.
+3. Add AssetDatabase search.
+4. Add play mode controls.
+5. Add test runner endpoints.

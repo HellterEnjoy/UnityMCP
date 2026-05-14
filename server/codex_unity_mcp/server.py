@@ -234,6 +234,64 @@ def duplicate_gameobject(
 
 
 @mcp.tool()
+def add_component(
+    component_type: str,
+    instance_id: int | None = None,
+    name: str | None = None,
+    path: str | None = None,
+    allow_multiple: bool = False,
+) -> str:
+    """Add a component to a GameObject with Unity Undo support.
+
+    Args:
+        component_type: Component short name or full type name, such as Rigidbody or UnityEngine.Rigidbody.
+        instance_id: Unity instance id from hierarchy/find results.
+        name: Exact GameObject name. Instance id or path is safer if names repeat.
+        path: Hierarchy path such as Root/Player.
+        allow_multiple: Add even when the GameObject already has a matching component.
+    """
+    return pretty(
+        client.get(
+            "/scene/add-component",
+            id=instance_id,
+            name=name,
+            path=path,
+            componentType=component_type,
+            allowMultiple=allow_multiple,
+        )
+    )
+
+
+@mcp.tool()
+def remove_component(
+    component_type: str,
+    instance_id: int | None = None,
+    name: str | None = None,
+    path: str | None = None,
+    remove_all: bool = False,
+) -> str:
+    """Remove a component from a GameObject with Unity Undo support.
+
+    Args:
+        component_type: Component short name or full type name, such as Rigidbody or UnityEngine.Rigidbody.
+        instance_id: Unity instance id from hierarchy/find results.
+        name: Exact GameObject name. Instance id or path is safer if names repeat.
+        path: Hierarchy path such as Root/Player.
+        remove_all: Remove all matching components instead of the first one.
+    """
+    return pretty(
+        client.get(
+            "/scene/remove-component",
+            id=instance_id,
+            name=name,
+            path=path,
+            componentType=component_type,
+            removeAll=remove_all,
+        )
+    )
+
+
+@mcp.tool()
 def read_console(count: int = 50) -> str:
     """Return recent Unity Console entries."""
     return pretty(client.get("/console", count=count))
