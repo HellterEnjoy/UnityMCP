@@ -20,13 +20,13 @@ class UnityClient:
         self.base_url = (base_url or os.environ.get("UNITY_MCP_BRIDGE_URL") or DEFAULT_BASE_URL).rstrip("/")
         self.timeout = timeout
 
-    def get(self, path: str, **params: Any) -> dict[str, Any]:
+    def get(self, endpoint: str, **params: Any) -> dict[str, Any]:
         query = {
             key: self._encode_value(value)
             for key, value in params.items()
             if value is not None
         }
-        url = f"{self.base_url}{path}"
+        url = f"{self.base_url}{endpoint}"
         if query:
             url = f"{url}?{urllib.parse.urlencode(query)}"
 
