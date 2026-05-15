@@ -47,6 +47,18 @@ instead of:
 The repository is already useful and installable, but the API and editor workflows are still
 moving. Expect new capabilities and some interface changes before `1.0`.
 
+## License
+
+This repository is not released under MIT or another permissive open-source license.
+
+Current license model:
+
+- personal use is allowed
+- personal modifications are allowed
+- redistribution, public forks, republishing, and commercial use require prior agreement with the author
+
+See [LICENSE](LICENSE).
+
 ## Requirements
 
 - Unity `2021.3+`
