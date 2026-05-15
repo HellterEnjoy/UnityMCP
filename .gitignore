@@ -2,6 +2,14 @@
 __pycache__/
 *.pyc
 *.egg-info/
+.vscode/
+*.user
+*.suo
+*.csproj
+*.sln
+*.log
+dist/
+build/
 Library/
 Temp/
 Obj/

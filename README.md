@@ -37,8 +37,22 @@ instead of:
   Unity Editor package with the localhost bridge.
 - `server`
   Python MCP server that exposes the bridge as Codex tools and resources.
-- [ROADMAP.md](/A:/UnityMCP/ROADMAP.md)
+- [ROADMAP.md](ROADMAP.md)
   Development roadmap and planned phases.
+
+## Project Status
+
+`Experimental / early alpha`
+
+The repository is already useful and installable, but the API and editor workflows are still
+moving. Expect new capabilities and some interface changes before `1.0`.
+
+## Requirements
+
+- Unity `2021.3+`
+- Python `3.10+`
+- Codex CLI / Codex app with MCP support
+- Windows PowerShell for the provided install script
 
 ## Current Pillars
 
@@ -65,6 +79,10 @@ instead of:
 - combine screenshots with structured state checks
 
 ## Quick Install In Unity
+
+Security warning:
+The bridge is local-only by design and listens on `127.0.0.1:8765`. Do not expose it on a public
+network interface without authentication and tighter command restrictions.
 
 1. Open your Unity project.
 2. Open `Window > Package Manager`.
@@ -263,9 +281,16 @@ See:
 - `examples\codex-config.example.toml`
 - `examples\unity-manifest-git.example.json`
 
+## Known Limitations
+
+- only supports a localhost bridge by default
+- not a real-time video stream
+- tested mainly on Windows with Codex-driven workflows
+- Unity editor APIs and MCP tool shapes may still change before `1.0`
+
 ## Roadmap
 
-The project now has a phase-based roadmap in [ROADMAP.md](/A:/UnityMCP/ROADMAP.md).
+The project now has a phase-based roadmap in [ROADMAP.md](ROADMAP.md).
 
 The next major block is `Editor Ergonomics`:
 
