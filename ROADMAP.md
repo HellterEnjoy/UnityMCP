@@ -24,7 +24,7 @@ The project is moving toward an agent workflow like this:
 | --- | --- | --- |
 | Foundation | Done | Scene inspection, editing, screenshots, console, safe edit mode |
 | Gameplay Loop | Done | Play Mode control, runtime field access, input, waits, test runner |
-| Editor Ergonomics | Next | Better editor screenshots, window focus, asset open/select, console workflow |
+| Editor Ergonomics | In Progress | Better editor screenshots, window focus, asset open/select, console workflow |
 | Graph Core | Planned | Generic node-graph inspection and editing layer |
 | Shader Graph Tools | Planned | Open, inspect, edit, connect, and verify Shader Graph assets |
 | Visual Scripting | Later | Read-first support, then safe graph edits |
@@ -65,6 +65,13 @@ Planned work:
 - clear console and wait for logs since a checkpoint
 - editor session checkpoints for selected object, focused pane, and open context
 - step-by-step screenshot traces for agent runs
+
+Implemented in this phase so far:
+
+- screenshots of specific panes such as Hierarchy, Inspector, Project, Scene, and Game
+- open and focus common editor windows
+- select scene objects explicitly
+- select and open assets from the Project view
 
 Why this phase matters:
 

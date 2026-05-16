@@ -87,8 +87,16 @@ See [LICENSE](LICENSE).
 
 - capture Scene View screenshots
 - capture Main Camera screenshots
+- capture Unity editor pane screenshots
 - read Unity Console output
 - combine screenshots with structured state checks
+
+### 4. Editor Ergonomics
+
+- focus and open common Unity windows
+- select and ping scene objects
+- select and open assets from the Project view
+- use editor-pane screenshots as part of the agent loop
 
 ## Quick Install In Unity
 
@@ -263,6 +271,14 @@ step-by-step agent testing.
 - `send_mouse_input(x, y, event_type="click", button=0)`
 - `click_ui_element(instance_id=None, name=None, path=None, button=0)`
 
+### Editor Ergonomics
+
+- `take_editor_screenshot(target="active_window", include_image=False, max_resolution=1400)`
+- `focus_editor_window(target)`
+- `select_scene_object(instance_id=None, name=None, path=None)`
+- `select_asset(asset_path=None, guid=None)`
+- `open_asset(asset_path=None, guid=None)`
+
 ### Wait And Verify
 
 - `wait_for_object(instance_id=None, name=None, path=None, exists=True, timeout_ms=5000, poll_ms=100)`
@@ -307,7 +323,7 @@ The project now has a phase-based roadmap in [ROADMAP.md](ROADMAP.md).
 The next major block is `Editor Ergonomics`:
 
 - full-editor screenshots
-- pane focus and window control
+- pane focus and window control refinement
 - asset open/select helpers
 - better console and session workflows
 

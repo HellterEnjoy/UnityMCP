@@ -332,6 +332,16 @@ namespace CodexUnityMcp
                     return SendMouseInput(query);
                 case "/input/click-ui":
                     return ClickUiElement(query);
+                case "/editor/screenshot":
+                    return CaptureEditorScreenshot(query);
+                case "/editor/focus-window":
+                    return FocusEditorWindow(query);
+                case "/editor/select-object":
+                    return SelectSceneObject(query);
+                case "/editor/select-asset":
+                    return SelectAsset(query);
+                case "/editor/open-asset":
+                    return OpenAsset(query);
                 case "/console":
                     return ReadConsole(query);
                 case "/screenshot":
@@ -1473,6 +1483,119 @@ namespace CodexUnityMcp
             });
         }
 
+        private static Dictionary<string, object> CaptureEditorScreenshot(Dictionary<string, string> query)
+        {
+            var target = Get(query, "target", "active_window").Trim().ToLowerInvariant();
+            var includeImage = Bool(query, "includeImage", false);
+            var maxResolution = Mathf.Clamp(Int(query, "maxResolution", 1400), 128, 4096);
+
+            EditorWindow window;
+            switch (target)
+            {
+                case "scene_view":
+                case "scene":
+                    window = SceneView.lastActiveSceneView;
+                    break;
+                case "game_view":
+                case "game":
+                    window = GetGameViewWindow();
+                    break;
+                case "active_window":
+                    window = EditorWindow.focusedWindow ?? EditorWindow.mouseOverWindow;
+                    break;
+                default:
+                    window = ResolveEditorWindowByToken(target);
+                    break;
+            }
+
+            if (window == null)
+            {
+                return Fail("window_not_found", $"No editor window available for target '{target}'");
+            }
+
+            FocusWindow(window);
+            window.Repaint();
+            InternalEditorUtilityRepaintAllViews();
+
+            var bytes = TryCaptureEditorWindow(window, maxResolution, out var width, out var height, out var error);
+            if (bytes == null)
+            {
+                return Fail("editor_capture_failed", error);
+            }
+
+            var payload = SaveScreenshotPayload(bytes, $"editor_{target}", width, height, includeImage);
+            payload["target"] = target;
+            payload["windowTitle"] = window.titleContent == null ? string.Empty : window.titleContent.text;
+            payload["windowType"] = window.GetType().FullName;
+            return Ok(payload);
+        }
+
+        private static Dictionary<string, object> FocusEditorWindow(Dictionary<string, string> query)
+        {
+            var target = Get(query, "target", string.Empty);
+            if (string.IsNullOrWhiteSpace(target))
+            {
+                return Fail("target_required", "target is required");
+            }
+
+            var window = ResolveOrOpenEditorWindow(target);
+            if (window == null)
+            {
+                return Fail("window_not_found", $"Editor window '{target}' could not be resolved");
+            }
+
+            FocusWindow(window);
+            return Ok(EditorWindowPayload(window, target));
+        }
+
+        private static Dictionary<string, object> SelectSceneObject(Dictionary<string, string> query)
+        {
+            var go = ResolveGameObject(query);
+            if (go == null)
+            {
+                return Fail("not_found", "GameObject not found");
+            }
+
+            Selection.activeGameObject = go;
+            EditorGUIUtility.PingObject(go);
+            return Ok(new Dictionary<string, object>
+            {
+                { "selectionType", "scene_object" },
+                { "gameObject", GameObjectDetails(go, false) }
+            });
+        }
+
+        private static Dictionary<string, object> SelectAsset(Dictionary<string, string> query)
+        {
+            var asset = ResolveAsset(query, out var assetPath);
+            if (asset == null)
+            {
+                return Fail("asset_not_found", "Asset not found");
+            }
+
+            Selection.activeObject = asset;
+            EditorGUIUtility.PingObject(asset);
+            return Ok(AssetPayload(asset, assetPath, "selected"));
+        }
+
+        private static Dictionary<string, object> OpenAsset(Dictionary<string, string> query)
+        {
+            var asset = ResolveAsset(query, out var assetPath);
+            if (asset == null)
+            {
+                return Fail("asset_not_found", "Asset not found");
+            }
+
+            Selection.activeObject = asset;
+            EditorGUIUtility.PingObject(asset);
+            var opened = AssetDatabase.OpenAsset(asset);
+            return Ok(new Dictionary<string, object>
+            {
+                { "opened", opened },
+                { "asset", AssetPayload(asset, assetPath, "opened") }
+            });
+        }
+
         private static Dictionary<string, object> CaptureScreenshot(Dictionary<string, string> query)
         {
             var source = Get(query, "source", "scene_view");
@@ -1548,6 +1671,120 @@ namespace CodexUnityMcp
             return Camera.main;
         }
 
+        private static byte[] TryCaptureEditorWindow(EditorWindow window, int maxResolution, out int width, out int height, out string error)
+        {
+            width = 0;
+            height = 0;
+            error = null;
+
+            var readScreenPixel = ResolveReadScreenPixelMethod();
+            if (readScreenPixel == null)
+            {
+                error = "Unity internal screen pixel capture API is unavailable in this version";
+                return null;
+            }
+
+            var rect = window.position;
+            var captureWidth = Mathf.Max(16, Mathf.RoundToInt(rect.width));
+            var captureHeight = Mathf.Max(16, Mathf.RoundToInt(rect.height));
+            var scale = Mathf.Min(1f, maxResolution / (float)Mathf.Max(captureWidth, captureHeight));
+            width = Mathf.Max(16, Mathf.RoundToInt(captureWidth * scale));
+            height = Mathf.Max(16, Mathf.RoundToInt(captureHeight * scale));
+
+            try
+            {
+                var raw = readScreenPixel.Invoke(null, new object[]
+                {
+                    new Vector2(rect.x, rect.y),
+                    captureWidth,
+                    captureHeight
+                }) as Color[];
+
+                if (raw == null || raw.Length == 0)
+                {
+                    error = "Unity returned no pixels for editor capture";
+                    return null;
+                }
+
+                var texture = new Texture2D(captureWidth, captureHeight, TextureFormat.RGBA32, false);
+                texture.SetPixels(raw);
+                texture.Apply();
+
+                Texture2D finalTexture = texture;
+                if (width != captureWidth || height != captureHeight)
+                {
+                    finalTexture = ScaleTexture(texture, width, height);
+                    Object.DestroyImmediate(texture);
+                }
+                else
+                {
+                    width = captureWidth;
+                    height = captureHeight;
+                }
+
+                var bytes = finalTexture.EncodeToPNG();
+                Object.DestroyImmediate(finalTexture);
+                return bytes;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return null;
+            }
+        }
+
+        private static MethodInfo ResolveReadScreenPixelMethod()
+        {
+            var type = Type.GetType("UnityEditorInternal.InternalEditorUtility,UnityEditor");
+            return type == null
+                ? null
+                : type.GetMethod("ReadScreenPixel", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vector2), typeof(int), typeof(int) }, null);
+        }
+
+        private static Texture2D ScaleTexture(Texture2D source, int width, int height)
+        {
+            var rt = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGB32);
+            var previous = RenderTexture.active;
+
+            try
+            {
+                Graphics.Blit(source, rt);
+                RenderTexture.active = rt;
+                var scaled = new Texture2D(width, height, TextureFormat.RGBA32, false);
+                scaled.ReadPixels(new Rect(0, 0, width, height), 0, 0);
+                scaled.Apply();
+                return scaled;
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                RenderTexture.ReleaseTemporary(rt);
+            }
+        }
+
+        private static Dictionary<string, object> SaveScreenshotPayload(byte[] bytes, string prefix, int width, int height, bool includeImage)
+        {
+            var dir = Path.Combine(Application.dataPath, "..", "Library", "CodexMcp", "Screenshots");
+            Directory.CreateDirectory(dir);
+            var fileName = $"{prefix}_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.png";
+            var filePath = Path.GetFullPath(Path.Combine(dir, fileName));
+            File.WriteAllBytes(filePath, bytes);
+
+            var payload = new Dictionary<string, object>
+            {
+                { "path", filePath },
+                { "width", width },
+                { "height", height }
+            };
+
+            if (includeImage)
+            {
+                payload["imageBase64"] = Convert.ToBase64String(bytes);
+            }
+
+            return payload;
+        }
+
         private static Dictionary<string, object> GameObjectDetails(GameObject go, bool includeProperties)
         {
             var components = new List<object>();
@@ -1596,6 +1833,48 @@ namespace CodexUnityMcp
             }
 
             return data;
+        }
+
+        private static Dictionary<string, object> AssetPayload(Object asset, string assetPath, string action)
+        {
+            return new Dictionary<string, object>
+            {
+                { "action", action },
+                { "name", asset.name },
+                { "type", asset.GetType().FullName },
+                { "assetPath", assetPath },
+                { "instanceId", asset.GetInstanceID() }
+            };
+        }
+
+        private static Object ResolveAsset(Dictionary<string, string> query, out string assetPath)
+        {
+            assetPath = Get(query, "assetPath", string.Empty);
+            if (!string.IsNullOrWhiteSpace(assetPath))
+            {
+                var direct = AssetDatabase.LoadAssetAtPath<Object>(assetPath);
+                if (direct != null)
+                {
+                    return direct;
+                }
+            }
+
+            var guid = Get(query, "guid", string.Empty);
+            if (!string.IsNullOrWhiteSpace(guid))
+            {
+                var pathFromGuid = AssetDatabase.GUIDToAssetPath(guid);
+                if (!string.IsNullOrWhiteSpace(pathFromGuid))
+                {
+                    assetPath = pathFromGuid;
+                    var guidAsset = AssetDatabase.LoadAssetAtPath<Object>(assetPath);
+                    if (guidAsset != null)
+                    {
+                        return guidAsset;
+                    }
+                }
+            }
+
+            return null;
         }
 
         private static Dictionary<string, object> SerializedProperties(Object target, int limit)
@@ -2712,11 +2991,111 @@ namespace CodexUnityMcp
             return type == null ? null : EditorWindow.GetWindow(type);
         }
 
+        private static EditorWindow ResolveOrOpenEditorWindow(string target)
+        {
+            var window = ResolveEditorWindowByToken(target);
+            if (window != null)
+            {
+                return window;
+            }
+
+            var menuPath = WindowMenuPath(target);
+            if (!string.IsNullOrWhiteSpace(menuPath))
+            {
+                EditorApplication.ExecuteMenuItem(menuPath);
+                return ResolveEditorWindowByToken(target);
+            }
+
+            return null;
+        }
+
+        private static EditorWindow ResolveEditorWindowByToken(string target)
+        {
+            var normalized = (target ?? string.Empty).Trim().ToLowerInvariant();
+            switch (normalized)
+            {
+                case "scene":
+                case "scene_view":
+                    return SceneView.lastActiveSceneView ?? EditorWindow.GetWindow<SceneView>();
+                case "game":
+                case "game_view":
+                    return GetGameViewWindow();
+                case "inspector":
+                    return FindEditorWindow("UnityEditor.InspectorWindow,UnityEditor");
+                case "project":
+                case "project_browser":
+                    return FindEditorWindow("UnityEditor.ProjectBrowser,UnityEditor");
+                case "console":
+                    return FindEditorWindow("UnityEditor.ConsoleWindow,UnityEditor");
+                case "hierarchy":
+                case "scene_hierarchy":
+                    return FindEditorWindow("UnityEditor.SceneHierarchyWindow,UnityEditor");
+                default:
+                    return null;
+            }
+        }
+
+        private static string WindowMenuPath(string target)
+        {
+            switch ((target ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "scene":
+                case "scene_view":
+                    return "Window/General/Scene";
+                case "game":
+                case "game_view":
+                    return "Window/General/Game";
+                case "inspector":
+                    return "Window/General/Inspector";
+                case "project":
+                case "project_browser":
+                    return "Window/General/Project";
+                case "console":
+                    return "Window/General/Console";
+                case "hierarchy":
+                case "scene_hierarchy":
+                    return "Window/General/Hierarchy";
+                default:
+                    return null;
+            }
+        }
+
+        private static EditorWindow FindEditorWindow(string typeName)
+        {
+            var type = Type.GetType(typeName, false);
+            return type == null ? null : EditorWindow.GetWindow(type);
+        }
+
         private static void FocusWindow(EditorWindow window)
         {
             window.Show();
             window.Focus();
             window.Repaint();
+        }
+
+        private static Dictionary<string, object> EditorWindowPayload(EditorWindow window, string target)
+        {
+            return new Dictionary<string, object>
+            {
+                { "target", target },
+                { "title", window.titleContent == null ? string.Empty : window.titleContent.text },
+                { "windowType", window.GetType().FullName },
+                { "position", new Dictionary<string, object>
+                    {
+                        { "x", window.position.x },
+                        { "y", window.position.y },
+                        { "width", window.position.width },
+                        { "height", window.position.height }
+                    }
+                }
+            };
+        }
+
+        private static void InternalEditorUtilityRepaintAllViews()
+        {
+            var type = Type.GetType("UnityEditorInternal.InternalEditorUtility,UnityEditor");
+            var method = type == null ? null : type.GetMethod("RepaintAllViews", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+            method?.Invoke(null, null);
         }
 
         private static Event BuildKeyEvent(EventType eventType, KeyCode keyCode, string character)

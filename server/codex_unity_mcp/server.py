@@ -598,6 +598,61 @@ def click_ui_element(
 
 
 @mcp.tool()
+def take_editor_screenshot(
+    target: str = "active_window",
+    include_image: bool = False,
+    max_resolution: int = 1400,
+) -> str:
+    """Capture a screenshot of a Unity editor window or pane.
+
+    Args:
+        target: active_window, scene, game, inspector, hierarchy, project, or console.
+        include_image: Include base64 PNG in the response.
+        max_resolution: Clamp the longest side of the capture.
+    """
+    return pretty(
+        client.get(
+            "/editor/screenshot",
+            target=target,
+            includeImage=include_image,
+            maxResolution=max_resolution,
+        )
+    )
+
+
+@mcp.tool()
+def focus_editor_window(target: str) -> str:
+    """Open or focus a Unity editor window.
+
+    Args:
+        target: scene, game, inspector, hierarchy, project, or console.
+    """
+    return pretty(client.get("/editor/focus-window", target=target))
+
+
+@mcp.tool()
+def select_scene_object(
+    instance_id: int | None = None,
+    name: str | None = None,
+    path: str | None = None,
+) -> str:
+    """Select and ping a scene object in the Unity editor."""
+    return pretty(client.get("/editor/select-object", id=instance_id, name=name, path=path))
+
+
+@mcp.tool()
+def select_asset(asset_path: str | None = None, guid: str | None = None) -> str:
+    """Select and ping an asset in the Unity editor."""
+    return pretty(client.get("/editor/select-asset", assetPath=asset_path, guid=guid))
+
+
+@mcp.tool()
+def open_asset(asset_path: str | None = None, guid: str | None = None) -> str:
+    """Open an asset in the Unity editor."""
+    return pretty(client.get("/editor/open-asset", assetPath=asset_path, guid=guid))
+
+
+@mcp.tool()
 def wait_for_object(
     instance_id: int | None = None,
     name: str | None = None,
