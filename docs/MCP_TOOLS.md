@@ -34,10 +34,15 @@
 ## Editor Ergonomics
 
 - `take_editor_screenshot(target="active_window", include_image=False, max_resolution=1400)`
+- `take_full_editor_screenshot(include_image=False, max_resolution=1800)`
 - `focus_editor_window(target)`
 - `select_scene_object(instance_id=None, name=None, path=None)`
 - `select_asset(asset_path=None, guid=None)`
 - `open_asset(asset_path=None, guid=None)`
+- `reveal_asset(asset_path=None, guid=None)`
+- `search_assets(filter="", in_folders=None, limit=50)`
+- `save_editor_session(session_id=None)`
+- `restore_editor_session(session_id)`
 
 ## Wait And Verify
 
@@ -53,6 +58,9 @@
 - `run_unity_tests(mode="editmode", assembly_names=None, test_names=None, group_names=None)`
 - `get_unity_test_status(run_id=None)`
 - `wait_for_unity_tests(require_success=True, timeout_ms=60000, poll_ms=250)`
+- `create_console_checkpoint(checkpoint_id=None)`
+- `read_console_since_checkpoint(checkpoint_id)`
+- `clear_console()`
 - `read_console(count=50)`
 - `take_scene_screenshot(source="scene_view", include_image=False, max_resolution=512)`
 

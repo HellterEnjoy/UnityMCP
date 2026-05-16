@@ -15,7 +15,7 @@ screenshots, and verify changes inside a live Unity project.
 - Play Mode control and runtime field access
 - Game View input simulation
 - Unity Console, screenshots, and Test Runner support
-- Editor window focus, asset selection, and pane screenshots
+- Editor window focus, asset selection, pane screenshots, and session helpers
 
 ## Why It Matters
 
@@ -76,7 +76,7 @@ restrictions.
 - Safe Edit Mode with snapshot, batch, rollback, and diff
 - Semi-realtime gameplay testing loop
 - Runtime field reads and writes during Play Mode
-- Editor ergonomics tools for focus, selection, and pane screenshots
+- Editor ergonomics tools for focus, selection, screenshots, console checkpoints, and session restore
 
 ## Known Limitations
 

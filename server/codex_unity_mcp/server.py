@@ -621,6 +621,18 @@ def take_editor_screenshot(
 
 
 @mcp.tool()
+def take_full_editor_screenshot(include_image: bool = False, max_resolution: int = 1800) -> str:
+    """Capture the full Unity editor window."""
+    return pretty(
+        client.get(
+            "/editor/full-screenshot",
+            includeImage=include_image,
+            maxResolution=max_resolution,
+        )
+    )
+
+
+@mcp.tool()
 def focus_editor_window(target: str) -> str:
     """Open or focus a Unity editor window.
 
@@ -650,6 +662,54 @@ def select_asset(asset_path: str | None = None, guid: str | None = None) -> str:
 def open_asset(asset_path: str | None = None, guid: str | None = None) -> str:
     """Open an asset in the Unity editor."""
     return pretty(client.get("/editor/open-asset", assetPath=asset_path, guid=guid))
+
+
+@mcp.tool()
+def reveal_asset(asset_path: str | None = None, guid: str | None = None) -> str:
+    """Reveal an asset in the Unity Project window."""
+    return pretty(client.get("/editor/reveal-asset", assetPath=asset_path, guid=guid))
+
+
+@mcp.tool()
+def search_assets(filter: str = "", in_folders: list[str] | None = None, limit: int = 50) -> str:
+    """Search Unity assets through AssetDatabase.
+
+    Args:
+        filter: Unity AssetDatabase search string such as `t:Scene Sample`.
+        in_folders: Optional list of folders like `Assets/Scenes`.
+        limit: Maximum number of results to return.
+    """
+    return pretty(client.get("/editor/search-assets", filter=filter, inFolders=in_folders, limit=limit))
+
+
+@mcp.tool()
+def save_editor_session(session_id: str | None = None) -> str:
+    """Save the current focused window and selection state."""
+    return pretty(client.get("/editor/save-session", id=session_id))
+
+
+@mcp.tool()
+def restore_editor_session(session_id: str) -> str:
+    """Restore a previously saved focused window and selection state."""
+    return pretty(client.get("/editor/restore-session", id=session_id))
+
+
+@mcp.tool()
+def create_console_checkpoint(checkpoint_id: str | None = None) -> str:
+    """Save the current Unity console position as a checkpoint."""
+    return pretty(client.get("/console/checkpoint", id=checkpoint_id))
+
+
+@mcp.tool()
+def read_console_since_checkpoint(checkpoint_id: str) -> str:
+    """Read Unity console entries created after a saved checkpoint."""
+    return pretty(client.get("/console/since", id=checkpoint_id))
+
+
+@mcp.tool()
+def clear_console() -> str:
+    """Clear the Unity Console."""
+    return pretty(client.get("/console/clear"))
 
 
 @mcp.tool()

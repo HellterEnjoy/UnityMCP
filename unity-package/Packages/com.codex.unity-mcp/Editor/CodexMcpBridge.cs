@@ -31,6 +31,8 @@ namespace CodexUnityMcp
         private const int MaxRecentLogs = 256;
         private static readonly ConcurrentQueue<BridgeRequest> Requests = new ConcurrentQueue<BridgeRequest>();
         private static readonly Dictionary<string, SceneSnapshot> Snapshots = new Dictionary<string, SceneSnapshot>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, ConsoleCheckpoint> ConsoleCheckpoints = new Dictionary<string, ConsoleCheckpoint>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, EditorSessionState> EditorSessions = new Dictionary<string, EditorSessionState>(StringComparer.OrdinalIgnoreCase);
         private static readonly object RecentLogsLock = new object();
         private static readonly List<RuntimeLogEntry> RecentLogs = new List<RuntimeLogEntry>();
         private static readonly object TestRunLock = new object();
@@ -334,6 +336,8 @@ namespace CodexUnityMcp
                     return ClickUiElement(query);
                 case "/editor/screenshot":
                     return CaptureEditorScreenshot(query);
+                case "/editor/full-screenshot":
+                    return CaptureFullEditorScreenshot(query);
                 case "/editor/focus-window":
                     return FocusEditorWindow(query);
                 case "/editor/select-object":
@@ -342,6 +346,20 @@ namespace CodexUnityMcp
                     return SelectAsset(query);
                 case "/editor/open-asset":
                     return OpenAsset(query);
+                case "/editor/reveal-asset":
+                    return RevealAssetInProject(query);
+                case "/editor/search-assets":
+                    return SearchAssets(query);
+                case "/editor/save-session":
+                    return SaveEditorSession(query);
+                case "/editor/restore-session":
+                    return RestoreEditorSession(query);
+                case "/console/checkpoint":
+                    return CreateConsoleCheckpoint(query);
+                case "/console/since":
+                    return ReadConsoleSinceCheckpoint(query);
+                case "/console/clear":
+                    return ClearConsole();
                 case "/console":
                     return ReadConsole(query);
                 case "/screenshot":
@@ -1434,6 +1452,92 @@ namespace CodexUnityMcp
         private static Dictionary<string, object> ReadConsole(Dictionary<string, string> query)
         {
             var count = Int(query, "count", 50);
+            return ReadConsoleEntries(Math.Max(0, GetConsoleEntryCount() - count), int.MaxValue);
+        }
+
+        private static Dictionary<string, object> CreateConsoleCheckpoint(Dictionary<string, string> query)
+        {
+            var id = Get(query, "id", string.Empty);
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                id = $"console-{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+            }
+
+            var checkpoint = new ConsoleCheckpoint
+            {
+                Id = id,
+                EntryIndex = GetConsoleEntryCount(),
+                CreatedUtc = DateTime.UtcNow
+            };
+            ConsoleCheckpoints[id] = checkpoint;
+
+            return Ok(new Dictionary<string, object>
+            {
+                { "id", checkpoint.Id },
+                { "entryIndex", checkpoint.EntryIndex },
+                { "createdUtc", checkpoint.CreatedUtc.ToString("o", CultureInfo.InvariantCulture) }
+            });
+        }
+
+        private static Dictionary<string, object> ReadConsoleSinceCheckpoint(Dictionary<string, string> query)
+        {
+            var id = Get(query, "id", string.Empty);
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                return Fail("checkpoint_required", "id is required");
+            }
+
+            if (!ConsoleCheckpoints.TryGetValue(id, out var checkpoint))
+            {
+                return Fail("checkpoint_not_found", $"Console checkpoint '{id}' was not found");
+            }
+
+            return ReadConsoleEntries(checkpoint.EntryIndex, int.MaxValue);
+        }
+
+        private static Dictionary<string, object> ClearConsole()
+        {
+            try
+            {
+                var logEntriesType = Type.GetType("UnityEditor.LogEntries,UnityEditor");
+                if (logEntriesType == null)
+                {
+                    return Fail("console_unavailable", "Unity LogEntries reflection API is unavailable in this Unity version");
+                }
+
+                var clear = logEntriesType.GetMethod("Clear", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                if (clear == null)
+                {
+                    return Fail("console_clear_unavailable", "Unity console clear API is unavailable in this Unity version");
+                }
+
+                clear.Invoke(null, null);
+                return Ok(new Dictionary<string, object> { { "cleared", true } });
+            }
+            catch (Exception ex)
+            {
+                return Fail("console_clear_error", ex.Message);
+            }
+        }
+
+        private static int GetConsoleEntryCount()
+        {
+            try
+            {
+                var logEntriesType = Type.GetType("UnityEditor.LogEntries,UnityEditor");
+                var getCount = logEntriesType == null
+                    ? null
+                    : logEntriesType.GetMethod("GetCount", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                return getCount == null ? 0 : (int)getCount.Invoke(null, null);
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static Dictionary<string, object> ReadConsoleEntries(int fromIndex, int maxCount)
+        {
             var entries = new List<object>();
 
             try
@@ -1451,11 +1555,12 @@ namespace CodexUnityMcp
                 var end = logEntriesType.GetMethod("EndGettingEntries", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
 
                 var total = (int)getCount.Invoke(null, null);
-                var from = Math.Max(0, total - count);
+                var from = Math.Max(0, fromIndex);
+                var toExclusive = Math.Min(total, from + Math.Max(0, maxCount));
                 var entry = Activator.CreateInstance(logEntryType);
 
                 start?.Invoke(null, null);
-                for (var i = from; i < total; i++)
+                for (var i = from; i < toExclusive; i++)
                 {
                     getEntry.Invoke(null, new[] { (object)i, entry });
                     entries.Add(new Dictionary<string, object>
@@ -1479,6 +1584,7 @@ namespace CodexUnityMcp
             return Ok(new Dictionary<string, object>
             {
                 { "count", entries.Count },
+                { "fromIndex", fromIndex },
                 { "items", entries }
             });
         }
@@ -1527,6 +1633,35 @@ namespace CodexUnityMcp
             payload["target"] = target;
             payload["windowTitle"] = window.titleContent == null ? string.Empty : window.titleContent.text;
             payload["windowType"] = window.GetType().FullName;
+            return Ok(payload);
+        }
+
+        private static Dictionary<string, object> CaptureFullEditorScreenshot(Dictionary<string, string> query)
+        {
+            var includeImage = Bool(query, "includeImage", false);
+            var maxResolution = Mathf.Clamp(Int(query, "maxResolution", 1800), 256, 4096);
+            var rect = ResolveMainEditorWindowRect();
+            if (!rect.HasValue)
+            {
+                return Fail("main_window_unavailable", "Could not resolve Unity main window bounds");
+            }
+
+            InternalEditorUtilityRepaintAllViews();
+            var bytes = TryCaptureScreenRect(rect.Value, maxResolution, out var width, out var height, out var error);
+            if (bytes == null)
+            {
+                return Fail("editor_capture_failed", error);
+            }
+
+            var payload = SaveScreenshotPayload(bytes, "editor_full", width, height, includeImage);
+            payload["target"] = "full_editor";
+            payload["windowRect"] = new Dictionary<string, object>
+            {
+                { "x", rect.Value.x },
+                { "y", rect.Value.y },
+                { "width", rect.Value.width },
+                { "height", rect.Value.height }
+            };
             return Ok(payload);
         }
 
@@ -1594,6 +1729,118 @@ namespace CodexUnityMcp
                 { "opened", opened },
                 { "asset", AssetPayload(asset, assetPath, "opened") }
             });
+        }
+
+        private static Dictionary<string, object> RevealAssetInProject(Dictionary<string, string> query)
+        {
+            var asset = ResolveAsset(query, out var assetPath);
+            if (asset == null)
+            {
+                return Fail("asset_not_found", "Asset not found");
+            }
+
+            Selection.activeObject = asset;
+            EditorUtility.FocusProjectWindow();
+            EditorGUIUtility.PingObject(asset);
+            return Ok(AssetPayload(asset, assetPath, "revealed"));
+        }
+
+        private static Dictionary<string, object> SearchAssets(Dictionary<string, string> query)
+        {
+            var filter = Get(query, "filter", string.Empty);
+            var inFolders = Get(query, "inFolders", string.Empty);
+            var limit = Mathf.Clamp(Int(query, "limit", 50), 1, 500);
+            var folders = string.IsNullOrWhiteSpace(inFolders) ? null : SplitCsv(inFolders);
+            var guids = folders == null || folders.Length == 0
+                ? AssetDatabase.FindAssets(filter)
+                : AssetDatabase.FindAssets(filter, folders);
+
+            var items = new List<object>();
+            for (var i = 0; i < guids.Length && items.Count < limit; i++)
+            {
+                var path = AssetDatabase.GUIDToAssetPath(guids[i]);
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    continue;
+                }
+
+                var asset = AssetDatabase.LoadAssetAtPath<Object>(path);
+                if (asset == null)
+                {
+                    continue;
+                }
+
+                var payload = AssetPayload(asset, path, "found");
+                payload["guid"] = guids[i];
+                items.Add(payload);
+            }
+
+            return Ok(new Dictionary<string, object>
+            {
+                { "filter", filter },
+                { "count", items.Count },
+                { "items", items }
+            });
+        }
+
+        private static Dictionary<string, object> SaveEditorSession(Dictionary<string, string> query)
+        {
+            var id = Get(query, "id", string.Empty);
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                id = $"session-{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+            }
+
+            var state = CaptureEditorSession(id);
+            EditorSessions[id] = state;
+            return Ok(EditorSessionPayload(state));
+        }
+
+        private static Dictionary<string, object> RestoreEditorSession(Dictionary<string, string> query)
+        {
+            var id = Get(query, "id", string.Empty);
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                return Fail("session_required", "id is required");
+            }
+
+            if (!EditorSessions.TryGetValue(id, out var state))
+            {
+                return Fail("session_not_found", $"Editor session '{id}' was not found");
+            }
+
+            if (!string.IsNullOrWhiteSpace(state.FocusedWindowTarget))
+            {
+                var window = ResolveOrOpenEditorWindow(state.FocusedWindowTarget);
+                if (window != null)
+                {
+                    FocusWindow(window);
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(state.SelectedAssetPath))
+            {
+                var asset = AssetDatabase.LoadAssetAtPath<Object>(state.SelectedAssetPath);
+                if (asset != null)
+                {
+                    Selection.activeObject = asset;
+                    EditorGUIUtility.PingObject(asset);
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(state.SelectedObjectPath))
+            {
+                var go = ResolveGameObject(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    { "path", state.SelectedObjectPath }
+                });
+                if (go != null)
+                {
+                    Selection.activeGameObject = go;
+                    EditorGUIUtility.PingObject(go);
+                }
+            }
+
+            return Ok(EditorSessionPayload(CaptureEditorSession(id)));
         }
 
         private static Dictionary<string, object> CaptureScreenshot(Dictionary<string, string> query)
@@ -1673,6 +1920,11 @@ namespace CodexUnityMcp
 
         private static byte[] TryCaptureEditorWindow(EditorWindow window, int maxResolution, out int width, out int height, out string error)
         {
+            return TryCaptureScreenRect(window.position, maxResolution, out width, out height, out error);
+        }
+
+        private static byte[] TryCaptureScreenRect(Rect rect, int maxResolution, out int width, out int height, out string error)
+        {
             width = 0;
             height = 0;
             error = null;
@@ -1684,7 +1936,6 @@ namespace CodexUnityMcp
                 return null;
             }
 
-            var rect = window.position;
             var captureWidth = Mathf.Max(16, Mathf.RoundToInt(rect.width));
             var captureHeight = Mathf.Max(16, Mathf.RoundToInt(rect.height));
             var scale = Mathf.Min(1f, maxResolution / (float)Mathf.Max(captureWidth, captureHeight));
@@ -1847,6 +2098,70 @@ namespace CodexUnityMcp
             };
         }
 
+        private static EditorSessionState CaptureEditorSession(string id)
+        {
+            var focusedWindow = EditorWindow.focusedWindow ?? EditorWindow.mouseOverWindow;
+            var selectedObject = Selection.activeGameObject;
+            var selectedAsset = selectedObject == null ? Selection.activeObject : null;
+
+            return new EditorSessionState
+            {
+                Id = id,
+                CapturedUtc = DateTime.UtcNow,
+                FocusedWindowTarget = FocusTargetForWindow(focusedWindow),
+                SelectedObjectPath = selectedObject == null ? string.Empty : GetPath(selectedObject),
+                SelectedAssetPath = selectedAsset == null ? string.Empty : AssetDatabase.GetAssetPath(selectedAsset)
+            };
+        }
+
+        private static Dictionary<string, object> EditorSessionPayload(EditorSessionState state)
+        {
+            return new Dictionary<string, object>
+            {
+                { "id", state.Id },
+                { "capturedUtc", state.CapturedUtc.ToString("o", CultureInfo.InvariantCulture) },
+                { "focusedWindowTarget", state.FocusedWindowTarget },
+                { "selectedObjectPath", state.SelectedObjectPath },
+                { "selectedAssetPath", state.SelectedAssetPath }
+            };
+        }
+
+        private static string FocusTargetForWindow(EditorWindow window)
+        {
+            if (window == null)
+            {
+                return string.Empty;
+            }
+
+            var typeName = window.GetType().FullName ?? string.Empty;
+            if (typeName.IndexOf("InspectorWindow", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "inspector";
+            }
+            if (typeName.IndexOf("ProjectBrowser", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "project";
+            }
+            if (typeName.IndexOf("ConsoleWindow", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "console";
+            }
+            if (typeName.IndexOf("SceneHierarchyWindow", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "hierarchy";
+            }
+            if (window is SceneView)
+            {
+                return "scene";
+            }
+            if (typeName.IndexOf("GameView", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "game";
+            }
+
+            return string.Empty;
+        }
+
         private static Object ResolveAsset(Dictionary<string, string> query, out string assetPath)
         {
             assetPath = Get(query, "assetPath", string.Empty);
@@ -1875,6 +2190,26 @@ namespace CodexUnityMcp
             }
 
             return null;
+        }
+
+        private static Rect? ResolveMainEditorWindowRect()
+        {
+            var editorGuiUtility = typeof(EditorGUIUtility);
+            var method = editorGuiUtility.GetMethod("GetMainWindowPosition", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+            if (method != null)
+            {
+                try
+                {
+                    return (Rect)method.Invoke(null, null);
+                }
+                catch
+                {
+                    // Fall back below.
+                }
+            }
+
+            var focused = EditorWindow.focusedWindow ?? EditorWindow.mouseOverWindow;
+            return focused == null ? (Rect?)null : focused.position;
         }
 
         private static Dictionary<string, object> SerializedProperties(Object target, int limit)
@@ -3262,6 +3597,22 @@ namespace CodexUnityMcp
             public string Layer { get; set; }
             public Dictionary<string, object> TransformSignature { get; set; }
             public List<object> ComponentsSignature { get; set; }
+        }
+
+        private sealed class ConsoleCheckpoint
+        {
+            public string Id { get; set; }
+            public int EntryIndex { get; set; }
+            public DateTime CreatedUtc { get; set; }
+        }
+
+        private sealed class EditorSessionState
+        {
+            public string Id { get; set; }
+            public DateTime CapturedUtc { get; set; }
+            public string FocusedWindowTarget { get; set; }
+            public string SelectedObjectPath { get; set; }
+            public string SelectedAssetPath { get; set; }
         }
 
         private sealed class RuntimeLogEntry

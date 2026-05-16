@@ -69,9 +69,13 @@ Planned work:
 Implemented in this phase so far:
 
 - screenshots of specific panes such as Hierarchy, Inspector, Project, Scene, and Game
+- full Unity editor screenshots
 - open and focus common editor windows
 - select scene objects explicitly
 - select and open assets from the Project view
+- search and reveal assets in the Project view
+- console checkpoints and clear-console workflow
+- save and restore focused-window and selection state
 
 Why this phase matters:
 

@@ -57,5 +57,8 @@ Current capabilities:
 - select and ping scene objects
 - select and open assets from the Project view
 - capture editor pane screenshots for Project, Inspector, Hierarchy, Scene, and Game
+- capture the full Unity editor window
+- create console checkpoints and read only new console output
+- save and restore editor selection and focused window state
 
 This is the layer that prepares the repository for graph tooling and deeper editor-driven workflows.
