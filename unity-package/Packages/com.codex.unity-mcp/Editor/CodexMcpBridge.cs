@@ -66,9 +66,19 @@ namespace CodexUnityMcp
         [MenuItem(WindowMenuRoot + "/Bridge/Start", false, 2100)]
         public static void StartServer()
         {
+            StartServerInternal(true);
+        }
+
+        private static void StartServerInternal(bool logFailures)
+        {
             if (_running)
             {
                 return;
+            }
+
+            if (_listener != null)
+            {
+                StopServerInternal(false);
             }
 
             try
@@ -87,16 +97,41 @@ namespace CodexUnityMcp
 
                 Debug.Log($"{ProductName} listening on http://{PrefixHost}:{_port}");
             }
+            catch (HttpListenerException ex) when (IsAddressAlreadyInUse(ex))
+            {
+                CleanupListenerState();
+                _nextAutoStartTime = EditorApplication.timeSinceStartup + 2.0d;
+                if (logFailures)
+                {
+                    Debug.LogError($"Failed to start {ProductName}: {ex.Message}");
+                }
+                else
+                {
+                    Debug.LogWarning($"{ProductName} port {_port} is still busy after a Unity reload. Will retry automatically.");
+                }
+            }
             catch (Exception ex)
             {
-                _running = false;
+                CleanupListenerState();
                 _nextAutoStartTime = EditorApplication.timeSinceStartup + 2.0d;
-                Debug.LogError($"Failed to start {ProductName}: {ex.Message}");
+                if (logFailures)
+                {
+                    Debug.LogError($"Failed to start {ProductName}: {ex.Message}");
+                }
+                else
+                {
+                    Debug.LogWarning($"{ProductName} auto-start failed: {ex.Message}");
+                }
             }
         }
 
         [MenuItem(WindowMenuRoot + "/Bridge/Stop", false, 2101)]
         public static void StopServer()
+        {
+            StopServerInternal(true);
+        }
+
+        private static void StopServerInternal(bool logStop)
         {
             _running = false;
 
@@ -110,9 +145,24 @@ namespace CodexUnityMcp
                 // Listener may already be closed during domain reload.
             }
 
-            _listener = null;
+            if (_listenerThread != null && _listenerThread.IsAlive)
+            {
+                try
+                {
+                    _listenerThread.Join(250);
+                }
+                catch
+                {
+                    // Best effort only.
+                }
+            }
+
+            CleanupListenerState();
             _nextAutoStartTime = EditorApplication.timeSinceStartup + 1.0d;
-            Debug.Log($"{ProductName} stopped");
+            if (logStop)
+            {
+                Debug.Log($"{ProductName} stopped");
+            }
         }
 
         [MenuItem(WindowMenuRoot + "/Bridge/Status", false, 2102)]
@@ -205,10 +255,16 @@ namespace CodexUnityMcp
 
         private static void OnPlayModeStateChanged(PlayModeStateChange state)
         {
+            if (state == PlayModeStateChange.ExitingEditMode || state == PlayModeStateChange.ExitingPlayMode)
+            {
+                StopServerInternal(false);
+                _nextAutoStartTime = EditorApplication.timeSinceStartup + 1.5d;
+                return;
+            }
+
             if (state == PlayModeStateChange.EnteredEditMode || state == PlayModeStateChange.EnteredPlayMode)
             {
-                _nextAutoStartTime = EditorApplication.timeSinceStartup + 0.5d;
-                EditorApplication.delayCall += StartServer;
+                _nextAutoStartTime = EditorApplication.timeSinceStartup + 1.0d;
             }
         }
 
@@ -225,7 +281,7 @@ namespace CodexUnityMcp
             }
 
             _nextAutoStartTime = EditorApplication.timeSinceStartup + 2.0d;
-            StartServer();
+            StartServerInternal(false);
         }
 
         private static void ListenLoop()
@@ -250,6 +306,20 @@ namespace CodexUnityMcp
                     Debug.LogWarning($"{ProductName} listener error: {ex.Message}");
                 }
             }
+        }
+
+        private static void CleanupListenerState()
+        {
+            _running = false;
+            _listener = null;
+            _listenerThread = null;
+        }
+
+        private static bool IsAddressAlreadyInUse(HttpListenerException ex)
+        {
+            const int Wsaeaddrinuse = 10048;
+            const int Win32AlreadyExists = 183;
+            return ex != null && (ex.ErrorCode == Wsaeaddrinuse || ex.ErrorCode == Win32AlreadyExists);
         }
 
         private static void HandleContext(HttpListenerContext context)
