@@ -35,8 +35,10 @@ Unity MCP already exposes tools for:
 - GameObject creation, duplication, deletion, and transform changes
 - component add/remove
 - runtime component field read/write
+- live runtime field/property reads during Play Mode when values differ from serialized state
 - safe multi-step scene editing with snapshot, diff, rollback, and batch execution
 - asset search/select/open/reveal
+- ScriptableObject asset creation and serialized field edits
 - editor window focus and screenshots
 - full editor screenshots
 - console checkpoints and log reads

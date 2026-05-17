@@ -28,6 +28,7 @@
 - `get_play_state()`
 - `get_component_field(component_type, property_path, instance_id=None, name=None, path=None, component_index=0)`
 - `set_component_field(component_type, property_path, value, instance_id=None, name=None, path=None, component_index=0)`
+- `get_runtime_component_value(component_type, member_path, instance_id=None, name=None, path=None, component_index=0)`
 - `send_keyboard_input(key, event_type="press", character=None)`
 - `send_mouse_input(x, y, event_type="click", button=0)`
 - `click_ui_element(instance_id=None, name=None, path=None, button=0)`
@@ -42,6 +43,9 @@
 - `open_asset(asset_path=None, guid=None)`
 - `reveal_asset(asset_path=None, guid=None)`
 - `search_assets(filter="", in_folders=None, limit=50)`
+- `create_scriptable_object_asset(type_name, asset_path, overwrite=False)`
+- `inspect_scriptable_object_asset(asset_path=None, guid=None, include_properties=True)`
+- `set_scriptable_object_field(property_path, value, asset_path=None, guid=None)`
 - `save_editor_session(session_id=None)`
 - `restore_editor_session(session_id)`
 
@@ -51,6 +55,7 @@
 - `wait_for_log(text, log_type=None, since_seconds=60.0, timeout_ms=5000, poll_ms=100)`
 - `wait_for_scene(scene_name=None, scene_path=None, timeout_ms=5000, poll_ms=100)`
 - `wait_for_component_field(component_type, property_path, expected, instance_id=None, name=None, path=None, component_index=0, comparison="equals", timeout_ms=5000, poll_ms=100)`
+- `wait_for_runtime_component_value(component_type, member_path, expected, instance_id=None, name=None, path=None, component_index=0, comparison="equals", timeout_ms=5000, poll_ms=100)`
 - `wait_for_play_mode(is_playing=True, is_paused=None, timeout_ms=10000, poll_ms=100)`
 
 ## Test Runner And Screenshots

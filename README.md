@@ -91,8 +91,9 @@ restrictions.
 
 - Safe Edit Mode with snapshot, batch, rollback, and diff
 - Semi-realtime gameplay testing loop
-- Runtime field reads and writes during Play Mode
+- Runtime field reads and writes during Play Mode, including live runtime inspection beyond serialized state
 - Editor ergonomics tools for focus, selection, screenshots, console checkpoints, and session restore
+- ScriptableObject asset creation and field editing through MCP
 - Works with Codex today and is structured to plug into other MCP clients without changing Unity-side tooling
 - Includes an explicit capabilities overview so agents can discover scene, runtime, asset, screenshot, and test tools faster
 

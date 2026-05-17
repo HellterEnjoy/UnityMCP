@@ -346,6 +346,8 @@ namespace CodexUnityMcp
                     return GetComponentField(query);
                 case "/runtime/set-component-field":
                     return SetComponentField(query);
+                case "/runtime/live-component-field":
+                    return GetLiveComponentField(query);
                 case "/input/keyboard":
                     return SendKeyboardInput(query);
                 case "/input/mouse":
@@ -368,6 +370,12 @@ namespace CodexUnityMcp
                     return RevealAssetInProject(query);
                 case "/editor/search-assets":
                     return SearchAssets(query);
+                case "/asset/create-scriptable-object":
+                    return CreateScriptableObjectAsset(query);
+                case "/asset/inspect-scriptable-object":
+                    return InspectScriptableObjectAsset(query);
+                case "/asset/set-scriptable-object-field":
+                    return SetScriptableObjectField(query);
                 case "/editor/save-session":
                     return SaveEditorSession(query);
                 case "/editor/restore-session":
@@ -395,6 +403,7 @@ namespace CodexUnityMcp
                 case "/wait/log":
                 case "/wait/scene":
                 case "/wait/component-field":
+                case "/wait/live-component-field":
                 case "/wait/play-mode":
                 case "/wait/tests":
                     return true;
@@ -439,6 +448,8 @@ namespace CodexUnityMcp
                     return WaitForSceneCondition(query);
                 case "/wait/component-field":
                     return WaitForComponentFieldCondition(query);
+                case "/wait/live-component-field":
+                    return WaitForLiveComponentFieldCondition(query);
                 case "/wait/play-mode":
                     return WaitForPlayModeCondition(query);
                 case "/wait/tests":
@@ -1190,6 +1201,23 @@ namespace CodexUnityMcp
             });
         }
 
+        private static Dictionary<string, object> GetLiveComponentField(Dictionary<string, string> query)
+        {
+            if (!TryResolveLiveComponentMember(query, out var component, out var memberPath, out var value, out var error))
+            {
+                return Fail("live_component_field_error", error);
+            }
+
+            return Ok(new Dictionary<string, object>
+            {
+                { "gameObject", GameObjectSummary(component.gameObject) },
+                { "componentType", component.GetType().FullName },
+                { "memberPath", memberPath },
+                { "isPlaying", EditorApplication.isPlaying },
+                { "value", RuntimeValue(value) }
+            });
+        }
+
         private static Dictionary<string, object> SendKeyboardInput(Dictionary<string, string> query)
         {
             var key = Get(query, "key", string.Empty);
@@ -1442,6 +1470,36 @@ namespace CodexUnityMcp
             }
 
             return Fail("wait_pending", $"Component field '{property.propertyPath}' has not matched comparison '{comparison}' yet");
+        }
+
+        private static Dictionary<string, object> WaitForLiveComponentFieldCondition(Dictionary<string, string> query)
+        {
+            if (!TryResolveLiveComponentMember(query, out var component, out var memberPath, out var actual, out var error))
+            {
+                return Fail("live_component_field_error", error);
+            }
+
+            if (!TryGetJsonValue(query, "expectedJson", "expected", out var rawExpected, out var expected, out error))
+            {
+                return Fail("invalid_expected", error);
+            }
+
+            var comparison = Get(query, "comparison", "equals").Trim().ToLowerInvariant();
+            var runtimeActual = RuntimeValue(actual);
+            if (MatchesComparison(runtimeActual, expected, comparison))
+            {
+                return Ok(new Dictionary<string, object>
+                {
+                    { "gameObject", GameObjectSummary(component.gameObject) },
+                    { "componentType", component.GetType().FullName },
+                    { "memberPath", memberPath },
+                    { "comparison", comparison },
+                    { "expectedRaw", rawExpected },
+                    { "value", runtimeActual }
+                });
+            }
+
+            return Fail("wait_pending", $"Runtime field '{memberPath}' has not matched comparison '{comparison}' yet");
         }
 
         private static Dictionary<string, object> WaitForTestsCondition(Dictionary<string, string> query)
@@ -1798,6 +1856,106 @@ namespace CodexUnityMcp
                 { "filter", filter },
                 { "count", items.Count },
                 { "items", items }
+            });
+        }
+
+        private static Dictionary<string, object> CreateScriptableObjectAsset(Dictionary<string, string> query)
+        {
+            var typeName = Get(query, "typeName", string.Empty);
+            if (!TryResolveScriptableObjectType(typeName, out var scriptableObjectType, out var error))
+            {
+                return Fail("scriptable_object_type_error", error);
+            }
+
+            var assetPath = NormalizeAssetPath(Get(query, "assetPath", string.Empty));
+            if (string.IsNullOrWhiteSpace(assetPath))
+            {
+                return Fail("asset_path_required", "assetPath is required");
+            }
+
+            if (!assetPath.EndsWith(".asset", StringComparison.OrdinalIgnoreCase))
+            {
+                return Fail("invalid_asset_path", "ScriptableObject assets must use a .asset path");
+            }
+
+            if (!assetPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(assetPath, "Assets", StringComparison.OrdinalIgnoreCase))
+            {
+                return Fail("invalid_asset_path", "ScriptableObject assets must live under Assets/");
+            }
+
+            var overwrite = Bool(query, "overwrite", false);
+            if (AssetDatabase.LoadAssetAtPath<Object>(assetPath) != null)
+            {
+                if (!overwrite)
+                {
+                    return Fail("asset_exists", $"Asset already exists at '{assetPath}'");
+                }
+
+                AssetDatabase.DeleteAsset(assetPath);
+            }
+
+            EnsureAssetFolder(assetPath);
+            var asset = ScriptableObject.CreateInstance(scriptableObjectType);
+            AssetDatabase.CreateAsset(asset, assetPath);
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+            return Ok(ScriptableObjectPayload(asset, assetPath, true));
+        }
+
+        private static Dictionary<string, object> InspectScriptableObjectAsset(Dictionary<string, string> query)
+        {
+            if (!TryResolveScriptableObjectAsset(query, out var asset, out var assetPath, out var error))
+            {
+                return Fail("scriptable_object_asset_error", error);
+            }
+
+            var includeProperties = Bool(query, "includeProperties", true);
+            return Ok(ScriptableObjectPayload(asset, assetPath, includeProperties));
+        }
+
+        private static Dictionary<string, object> SetScriptableObjectField(Dictionary<string, string> query)
+        {
+            if (!TryResolveScriptableObjectAsset(query, out var asset, out var assetPath, out var error))
+            {
+                return Fail("scriptable_object_asset_error", error);
+            }
+
+            var propertyPath = Get(query, "propertyPath", string.Empty);
+            if (string.IsNullOrWhiteSpace(propertyPath))
+            {
+                return Fail("property_path_required", "propertyPath is required");
+            }
+
+            if (!TryGetJsonValue(query, "valueJson", "value", out var rawValue, out var parsedValue, out error))
+            {
+                return Fail("invalid_value", error);
+            }
+
+            var serialized = new SerializedObject(asset);
+            var property = serialized.FindProperty(propertyPath);
+            if (property == null)
+            {
+                return Fail("property_not_found", $"Property '{propertyPath}' was not found on asset {asset.GetType().FullName}");
+            }
+
+            Undo.RecordObject(asset, "Unity MCP Set ScriptableObject Field");
+            if (!TryAssignSerializedProperty(property, parsedValue, out error))
+            {
+                return Fail("unsupported_property_write", error);
+            }
+
+            serialized.ApplyModifiedProperties();
+            EditorUtility.SetDirty(asset);
+            AssetDatabase.SaveAssets();
+
+            return Ok(new Dictionary<string, object>
+            {
+                { "asset", AssetPayload(asset, assetPath, "updated") },
+                { "assetType", asset.GetType().FullName },
+                { "propertyPath", property.propertyPath },
+                { "rawValue", rawValue },
+                { "value", SerializedValue(property) }
             });
         }
 
@@ -2215,6 +2373,74 @@ namespace CodexUnityMcp
             return null;
         }
 
+        private static bool TryResolveScriptableObjectAsset(
+            Dictionary<string, string> query,
+            out ScriptableObject asset,
+            out string assetPath,
+            out string error)
+        {
+            asset = null;
+            error = null;
+            var resolved = ResolveAsset(query, out assetPath);
+            if (resolved == null)
+            {
+                error = "Asset not found";
+                return false;
+            }
+
+            asset = resolved as ScriptableObject;
+            if (asset == null)
+            {
+                error = $"Asset '{assetPath}' is not a ScriptableObject";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static string NormalizeAssetPath(string assetPath)
+        {
+            if (string.IsNullOrWhiteSpace(assetPath))
+            {
+                return string.Empty;
+            }
+
+            assetPath = assetPath.Trim().Replace('\\', '/');
+            return assetPath;
+        }
+
+        private static void EnsureAssetFolder(string assetPath)
+        {
+            var folder = Path.GetDirectoryName(assetPath.Replace('\\', '/'));
+            if (string.IsNullOrWhiteSpace(folder))
+            {
+                return;
+            }
+
+            folder = folder.Replace('\\', '/');
+            if (AssetDatabase.IsValidFolder(folder))
+            {
+                return;
+            }
+
+            var parts = folder.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0 || !string.Equals(parts[0], "Assets", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var current = "Assets";
+            for (var i = 1; i < parts.Length; i++)
+            {
+                var next = $"{current}/{parts[i]}";
+                if (!AssetDatabase.IsValidFolder(next))
+                {
+                    AssetDatabase.CreateFolder(current, parts[i]);
+                }
+                current = next;
+            }
+        }
+
         private static Rect? ResolveMainEditorWindowRect()
         {
             var editorGuiUtility = typeof(EditorGUIUtility);
@@ -2274,6 +2500,18 @@ namespace CodexUnityMcp
             return result;
         }
 
+        private static Dictionary<string, object> ScriptableObjectPayload(ScriptableObject asset, string assetPath, bool includeProperties)
+        {
+            var payload = AssetPayload(asset, assetPath, "scriptable_object");
+            payload["assetType"] = asset.GetType().FullName;
+            if (includeProperties)
+            {
+                payload["properties"] = SerializedProperties(asset, 128);
+            }
+
+            return payload;
+        }
+
         private static object SerializedValue(SerializedProperty prop)
         {
             switch (prop.propertyType)
@@ -2328,6 +2566,79 @@ namespace CodexUnityMcp
                     return QuaternionValue(prop.quaternionValue);
                 default:
                     return null;
+            }
+        }
+
+        private static object RuntimeValue(object value)
+        {
+            if (value == null)
+            {
+                return null;
+            }
+
+            switch (value)
+            {
+                case bool _:
+                case byte _:
+                case sbyte _:
+                case short _:
+                case ushort _:
+                case int _:
+                case uint _:
+                case long _:
+                case ulong _:
+                case float _:
+                case double _:
+                case decimal _:
+                case string _:
+                    return value;
+                case Vector2 vector2:
+                    return Vec2(vector2);
+                case Vector3 vector3:
+                    return Vec3(vector3);
+                case Vector4 vector4:
+                    return Vec4(vector4);
+                case Quaternion quaternion:
+                    return QuaternionValue(quaternion);
+                case Color color:
+                    return Vec4(new Vector4(color.r, color.g, color.b, color.a));
+                case Rect rect:
+                    return new Dictionary<string, object>
+                    {
+                        { "x", rect.x },
+                        { "y", rect.y },
+                        { "width", rect.width },
+                        { "height", rect.height }
+                    };
+                case Bounds bounds:
+                    return new Dictionary<string, object>
+                    {
+                        { "center", Vec3(bounds.center) },
+                        { "size", Vec3(bounds.size) }
+                    };
+                case Enum enumValue:
+                    return enumValue.ToString();
+                case Object unityObject:
+                    return unityObject == null
+                        ? null
+                        : new Dictionary<string, object>
+                        {
+                            { "name", unityObject.name },
+                            { "type", unityObject.GetType().FullName },
+                            { "instanceId", unityObject.GetInstanceID() },
+                            { "assetPath", AssetDatabase.GetAssetPath(unityObject) }
+                        };
+                case IList list:
+                {
+                    var items = new List<object>();
+                    foreach (var item in list)
+                    {
+                        items.Add(RuntimeValue(item));
+                    }
+                    return items;
+                }
+                default:
+                    return Convert.ToString(value, CultureInfo.InvariantCulture);
             }
         }
 
@@ -2800,6 +3111,73 @@ namespace CodexUnityMcp
             return false;
         }
 
+        private static bool TryResolveScriptableObjectType(string typeName, out Type assetType, out string error)
+        {
+            assetType = null;
+            error = null;
+
+            if (string.IsNullOrWhiteSpace(typeName))
+            {
+                error = "typeName is required";
+                return false;
+            }
+
+            var direct = Type.GetType(typeName, false);
+            if (direct != null)
+            {
+                return ValidateScriptableObjectType(direct, out assetType, out error);
+            }
+
+            var exactFullNameMatches = new List<Type>();
+            var matches = new List<Type>();
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                foreach (var type in GetAssemblyTypes(assembly))
+                {
+                    if (type == null || !typeof(ScriptableObject).IsAssignableFrom(type) || type.IsAbstract)
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(type.FullName, typeName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        exactFullNameMatches.Add(type);
+                    }
+                    else if (string.Equals(type.Name, typeName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        matches.Add(type);
+                    }
+                }
+            }
+
+            if (exactFullNameMatches.Count == 1)
+            {
+                assetType = exactFullNameMatches[0];
+                return true;
+            }
+
+            if (exactFullNameMatches.Count > 1)
+            {
+                error = $"Ambiguous ScriptableObject type '{typeName}': {TypeList(exactFullNameMatches)}";
+                return false;
+            }
+
+            if (matches.Count == 1)
+            {
+                assetType = matches[0];
+                return true;
+            }
+
+            if (matches.Count > 1)
+            {
+                error = $"Ambiguous ScriptableObject type '{typeName}'. Use a full type name. Matches: {TypeList(matches)}";
+                return false;
+            }
+
+            error = $"ScriptableObject type '{typeName}' was not found";
+            return false;
+        }
+
         private static bool ValidateComponentType(Type type, out Type componentType, out string error)
         {
             componentType = null;
@@ -2818,6 +3196,27 @@ namespace CodexUnityMcp
             }
 
             componentType = type;
+            return true;
+        }
+
+        private static bool ValidateScriptableObjectType(Type type, out Type assetType, out string error)
+        {
+            assetType = null;
+            error = null;
+
+            if (!typeof(ScriptableObject).IsAssignableFrom(type))
+            {
+                error = $"{type.FullName} is not a UnityEngine.ScriptableObject";
+                return false;
+            }
+
+            if (type.IsAbstract)
+            {
+                error = $"{type.FullName} is abstract and cannot be created";
+                return false;
+            }
+
+            assetType = type;
             return true;
         }
 
@@ -3174,6 +3573,131 @@ namespace CodexUnityMcp
             }
 
             return true;
+        }
+
+        private static bool TryResolveLiveComponentMember(
+            Dictionary<string, string> query,
+            out Component component,
+            out string memberPath,
+            out object value,
+            out string error)
+        {
+            component = null;
+            memberPath = null;
+            value = null;
+            error = null;
+
+            var go = ResolveGameObject(query);
+            if (go == null)
+            {
+                error = "GameObject not found";
+                return false;
+            }
+
+            var componentTypeName = Get(query, "componentType", string.Empty);
+            if (!TryResolveComponentType(componentTypeName, out var componentType, out error))
+            {
+                return false;
+            }
+
+            var componentIndex = Int(query, "componentIndex", 0);
+            var matches = new List<Component>();
+            foreach (var candidate in go.GetComponents<Component>())
+            {
+                if (candidate != null && componentType.IsAssignableFrom(candidate.GetType()))
+                {
+                    matches.Add(candidate);
+                }
+            }
+
+            if (matches.Count == 0)
+            {
+                error = $"GameObject '{go.name}' does not have component {componentType.FullName}";
+                return false;
+            }
+
+            if (componentIndex < 0 || componentIndex >= matches.Count)
+            {
+                error = $"componentIndex {componentIndex} is out of range for {matches.Count} matching components";
+                return false;
+            }
+
+            memberPath = Get(query, "memberPath", string.Empty);
+            if (string.IsNullOrWhiteSpace(memberPath))
+            {
+                error = "memberPath is required";
+                return false;
+            }
+
+            component = matches[componentIndex];
+            if (!TryReadMemberPath(component, memberPath, out value, out error))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryReadMemberPath(object instance, string memberPath, out object value, out string error)
+        {
+            value = null;
+            error = null;
+            if (instance == null)
+            {
+                error = "Runtime instance is null";
+                return false;
+            }
+
+            var current = instance;
+            foreach (var segment in memberPath.Split(new[] { '.' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (current == null)
+                {
+                    error = $"Member path '{memberPath}' reached a null value before '{segment}'";
+                    return false;
+                }
+
+                if (!TryGetRuntimeMemberValue(current, segment, out current, out error))
+                {
+                    return false;
+                }
+            }
+
+            value = current;
+            return true;
+        }
+
+        private static bool TryGetRuntimeMemberValue(object instance, string memberName, out object value, out string error)
+        {
+            value = null;
+            error = null;
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var type = instance.GetType();
+
+            var field = type.GetField(memberName, flags);
+            if (field != null)
+            {
+                value = field.GetValue(instance);
+                return true;
+            }
+
+            var property = type.GetProperty(memberName, flags);
+            if (property != null && property.CanRead && property.GetIndexParameters().Length == 0)
+            {
+                try
+                {
+                    value = property.GetValue(instance, null);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    error = ex.Message;
+                    return false;
+                }
+            }
+
+            error = $"Runtime member '{memberName}' was not found on {type.FullName}";
+            return false;
         }
 
         private static bool TryGetJsonValue(

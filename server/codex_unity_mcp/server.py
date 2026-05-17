@@ -23,10 +23,10 @@ def capability_payload() -> dict[str, Any]:
         "summary": [
             "Unity scene hierarchy and editor state inspection",
             "GameObject search, inspection, creation, duplication, deletion, and transform edits",
-            "Component add/remove plus serialized field read/write",
+            "Component add/remove plus serialized and live runtime field access",
             "Safe scene batch edits with snapshot, diff, rollback, and Undo grouping",
             "Play Mode control, runtime field inspection, waits, logs, input simulation, and screenshots",
-            "Asset search/select/open/reveal plus editor focus/session helpers",
+            "Asset search/select/open/reveal, ScriptableObject editing, and editor focus/session helpers",
             "Unity Test Runner execution and polling",
         ],
         "strictUnityFirstWorkflow": [
@@ -61,6 +61,7 @@ def capability_payload() -> dict[str, Any]:
                 "get_play_state",
                 "get_component_field",
                 "set_component_field",
+                "get_runtime_component_value",
                 "send_keyboard_input",
                 "send_mouse_input",
                 "click_ui_element",
@@ -74,6 +75,9 @@ def capability_payload() -> dict[str, Any]:
                 "open_asset",
                 "reveal_asset",
                 "search_assets",
+                "create_scriptable_object_asset",
+                "inspect_scriptable_object_asset",
+                "set_scriptable_object_field",
                 "save_editor_session",
                 "restore_editor_session",
             ],
@@ -86,6 +90,7 @@ def capability_payload() -> dict[str, Any]:
                 "wait_for_log",
                 "wait_for_scene",
                 "wait_for_component_field",
+                "wait_for_runtime_component_value",
                 "wait_for_play_mode",
             ],
             "testsAndMenus": [
@@ -666,6 +671,32 @@ def set_component_field(
 
 
 @mcp.tool()
+def get_runtime_component_value(
+    component_type: str,
+    member_path: str,
+    instance_id: int | None = None,
+    name: str | None = None,
+    path: str | None = None,
+    component_index: int = 0,
+) -> str:
+    """Read a live runtime field or property from a component through reflection.
+
+    This is useful in Play Mode when the current runtime value may differ from serialized state.
+    """
+    return pretty(
+        client.get(
+            "/runtime/live-component-field",
+            id=instance_id,
+            name=name,
+            path=path,
+            componentType=component_type,
+            componentIndex=component_index,
+            memberPath=member_path,
+        )
+    )
+
+
+@mcp.tool()
 def send_keyboard_input(key: str, event_type: str = "press", character: str | None = None) -> str:
     """Send a keyboard event to the Unity Game view.
 
@@ -787,6 +818,55 @@ def search_assets(filter: str = "", in_folders: list[str] | None = None, limit: 
 
 
 @mcp.tool()
+def create_scriptable_object_asset(type_name: str, asset_path: str, overwrite: bool = False) -> str:
+    """Create a ScriptableObject asset by type name at the given Unity asset path."""
+    return pretty(
+        client.get(
+            "/asset/create-scriptable-object",
+            typeName=type_name,
+            assetPath=asset_path,
+            overwrite=overwrite,
+        )
+    )
+
+
+@mcp.tool()
+def inspect_scriptable_object_asset(
+    asset_path: str | None = None,
+    guid: str | None = None,
+    include_properties: bool = True,
+) -> str:
+    """Inspect a ScriptableObject asset and optionally include serialized properties."""
+    return pretty(
+        client.get(
+            "/asset/inspect-scriptable-object",
+            assetPath=asset_path,
+            guid=guid,
+            includeProperties=include_properties,
+        )
+    )
+
+
+@mcp.tool()
+def set_scriptable_object_field(
+    property_path: str,
+    value: Any,
+    asset_path: str | None = None,
+    guid: str | None = None,
+) -> str:
+    """Write one serialized field on a ScriptableObject asset."""
+    return pretty(
+        client.get(
+            "/asset/set-scriptable-object-field",
+            assetPath=asset_path,
+            guid=guid,
+            propertyPath=property_path,
+            valueJson=json.dumps(value, ensure_ascii=False),
+        )
+    )
+
+
+@mcp.tool()
 def save_editor_session(session_id: str | None = None) -> str:
     """Save the current focused window and selection state."""
     return pretty(client.get("/editor/save-session", id=session_id))
@@ -904,6 +984,37 @@ def wait_for_component_field(
                 component_index=component_index,
                 property_path=property_path,
             ),
+            expectedJson=json.dumps(expected, ensure_ascii=False),
+            comparison=comparison,
+            timeoutMs=timeout_ms,
+            pollMs=poll_ms,
+        )
+    )
+
+
+@mcp.tool()
+def wait_for_runtime_component_value(
+    component_type: str,
+    member_path: str,
+    expected: Any,
+    instance_id: int | None = None,
+    name: str | None = None,
+    path: str | None = None,
+    component_index: int = 0,
+    comparison: str = "equals",
+    timeout_ms: int = 5000,
+    poll_ms: int = 100,
+) -> str:
+    """Wait until a live runtime component field or property matches an expected value."""
+    return pretty(
+        client.get(
+            "/wait/live-component-field",
+            id=instance_id,
+            name=name,
+            path=path,
+            componentType=component_type,
+            componentIndex=component_index,
+            memberPath=member_path,
             expectedJson=json.dumps(expected, ensure_ascii=False),
             comparison=comparison,
             timeoutMs=timeout_ms,
