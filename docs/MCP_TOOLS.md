@@ -2,6 +2,7 @@
 
 ## Scene And Editor
 
+- `get_unity_capabilities()`
 - `unity_health()`
 - `get_editor_state()`
 - `get_scene_hierarchy(include_inactive=True, max_nodes=500)`
@@ -66,5 +67,6 @@
 
 ## MCP Resources
 
+- `unity://capabilities`
 - `unity://editor/state`
 - `unity://scene/hierarchy`

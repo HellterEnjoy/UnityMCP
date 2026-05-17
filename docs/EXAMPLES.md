@@ -51,3 +51,11 @@ See:
 
 - `examples\codex-mcp.example.json`
 - `examples\codex-config.example.toml`
+
+### Agent Bootstrap
+
+If a model is weak at discovering the available Unity tools, point it at:
+
+- `docs\AGENT_INSTRUCTIONS.md`
+- `get_unity_capabilities()`
+- `unity://capabilities`

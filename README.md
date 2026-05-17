@@ -79,6 +79,7 @@ restrictions.
 
 - [Installation](docs/INSTALLATION.md)
 - [Core Workflows](docs/WORKFLOWS.md)
+- [Agent Instructions](docs/AGENT_INSTRUCTIONS.md)
 - [MCP Tools](docs/MCP_TOOLS.md)
 - [Security](docs/SECURITY.md)
 - [Development](docs/DEVELOPMENT.md)
@@ -93,6 +94,7 @@ restrictions.
 - Runtime field reads and writes during Play Mode
 - Editor ergonomics tools for focus, selection, screenshots, console checkpoints, and session restore
 - Works with Codex today and is structured to plug into other MCP clients without changing Unity-side tooling
+- Includes an explicit capabilities overview so agents can discover scene, runtime, asset, screenshot, and test tools faster
 
 ## Known Limitations
 

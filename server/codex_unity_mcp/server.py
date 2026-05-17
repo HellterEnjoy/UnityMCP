@@ -17,6 +17,98 @@ def pretty(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+def capability_payload() -> dict[str, Any]:
+    return {
+        "server": "unity-mcp",
+        "summary": [
+            "Unity scene hierarchy and editor state inspection",
+            "GameObject search, inspection, creation, duplication, deletion, and transform edits",
+            "Component add/remove plus serialized field read/write",
+            "Safe scene batch edits with snapshot, diff, rollback, and Undo grouping",
+            "Play Mode control, runtime field inspection, waits, logs, input simulation, and screenshots",
+            "Asset search/select/open/reveal plus editor focus/session helpers",
+            "Unity Test Runner execution and polling",
+        ],
+        "strictUnityFirstWorkflow": [
+            "Inspect current editor or scene state before changing anything",
+            "Use safe_batch for multi-step scene edits instead of unrelated one-off edits",
+            "Verify results using hierarchy, component fields, logs, waits, screenshots, or test status",
+            "Prefer editor and scene screenshots when visual state matters",
+        ],
+        "categories": {
+            "sceneInspection": [
+                "get_editor_state",
+                "get_scene_hierarchy",
+                "find_gameobjects",
+                "inspect_gameobject",
+            ],
+            "sceneEditing": [
+                "set_transform",
+                "create_gameobject",
+                "delete_gameobject",
+                "duplicate_gameobject",
+                "add_component",
+                "remove_component",
+            ],
+            "safeEditMode": [
+                "snapshot_scene",
+                "diff_scene",
+                "safe_batch",
+            ],
+            "runtimeAndGameplay": [
+                "enter_play_mode",
+                "exit_play_mode",
+                "get_play_state",
+                "get_component_field",
+                "set_component_field",
+                "send_keyboard_input",
+                "send_mouse_input",
+                "click_ui_element",
+            ],
+            "editorErgonomics": [
+                "take_editor_screenshot",
+                "take_full_editor_screenshot",
+                "focus_editor_window",
+                "select_scene_object",
+                "select_asset",
+                "open_asset",
+                "reveal_asset",
+                "search_assets",
+                "save_editor_session",
+                "restore_editor_session",
+            ],
+            "consoleAndVerification": [
+                "create_console_checkpoint",
+                "read_console_since_checkpoint",
+                "clear_console",
+                "read_console",
+                "wait_for_object",
+                "wait_for_log",
+                "wait_for_scene",
+                "wait_for_component_field",
+                "wait_for_play_mode",
+            ],
+            "testsAndMenus": [
+                "invoke_menu_item",
+                "run_unity_tests",
+                "get_unity_test_status",
+                "wait_for_unity_tests",
+            ],
+            "screenshots": [
+                "take_scene_screenshot",
+                "take_editor_screenshot",
+                "take_full_editor_screenshot",
+            ],
+        },
+        "recommendedEntryPoints": [
+            "get_unity_capabilities",
+            "unity_health",
+            "get_editor_state",
+            "get_scene_hierarchy",
+        ],
+    }
+
+
 _BATCH_PARAM_ALIASES = {
     "instance_id": "id",
     "primitive_type": "primitiveType",
@@ -119,10 +211,22 @@ def scene_hierarchy_resource() -> str:
     return pretty(client.get("/scene/hierarchy", includeInactive=True, maxNodes=500))
 
 
+@mcp.resource("unity://capabilities")
+def capabilities_resource() -> str:
+    """Discoverable overview of Unity MCP tools and the recommended workflow."""
+    return pretty(capability_payload())
+
+
 @mcp.tool()
 def unity_health() -> str:
     """Check whether the Unity bridge is reachable."""
     return pretty(client.get("/health"))
+
+
+@mcp.tool()
+def get_unity_capabilities() -> str:
+    """Return a categorized overview of Unity MCP scene, runtime, asset, screenshot, and test tools."""
+    return pretty(capability_payload())
 
 
 @mcp.tool()
