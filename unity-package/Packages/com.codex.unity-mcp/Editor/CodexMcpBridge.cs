@@ -49,6 +49,7 @@ namespace CodexUnityMcp
         private static AddRequest _packageUpdateRequest;
         private static TestRunState _currentTestRun;
         private static double _nextAutoStartTime;
+        private static double _lastPortBusyWarningTime;
 
         static CodexMcpBridge()
         {
@@ -100,14 +101,24 @@ namespace CodexUnityMcp
             catch (HttpListenerException ex) when (IsAddressAlreadyInUse(ex))
             {
                 CleanupListenerState();
-                _nextAutoStartTime = EditorApplication.timeSinceStartup + 2.0d;
+                var existingBridgeStatus = DetectExistingBridgeStatus();
+                if (existingBridgeStatus == ExistingBridgeStatus.Reachable)
+                {
+                    _nextAutoStartTime = EditorApplication.timeSinceStartup + 10.0d;
+                    return;
+                }
+
+                _nextAutoStartTime = EditorApplication.timeSinceStartup + 5.0d;
                 if (logFailures)
                 {
-                    Debug.LogError($"Failed to start {ProductName}: {ex.Message}");
+                    var detail = existingBridgeStatus == ExistingBridgeStatus.PortBusy
+                        ? $"{ex.Message} The port is already occupied by another listener."
+                        : ex.Message;
+                    Debug.LogError($"Failed to start {ProductName}: {detail}");
                 }
                 else
                 {
-                    Debug.LogWarning($"{ProductName} port {_port} is still busy after a Unity reload. Will retry automatically.");
+                    MaybeLogAutoStartBusyWarning(existingBridgeStatus);
                 }
             }
             catch (Exception ex)
@@ -320,6 +331,46 @@ namespace CodexUnityMcp
             const int Wsaeaddrinuse = 10048;
             const int Win32AlreadyExists = 183;
             return ex != null && (ex.ErrorCode == Wsaeaddrinuse || ex.ErrorCode == Win32AlreadyExists);
+        }
+
+        private static ExistingBridgeStatus DetectExistingBridgeStatus()
+        {
+            try
+            {
+                var request = WebRequest.CreateHttp($"http://{PrefixHost}:{_port}/health");
+                request.Method = "GET";
+                request.Timeout = 500;
+                request.ReadWriteTimeout = 500;
+
+                using (var response = (HttpWebResponse)request.GetResponse())
+                using (var stream = response.GetResponseStream())
+                using (var reader = stream == null ? null : new StreamReader(stream))
+                {
+                    var body = reader == null ? string.Empty : reader.ReadToEnd();
+                    return body.IndexOf("\"bridge\":\"unity-mcp\"", StringComparison.OrdinalIgnoreCase) >= 0
+                        ? ExistingBridgeStatus.Reachable
+                        : ExistingBridgeStatus.PortBusy;
+                }
+            }
+            catch
+            {
+                return ExistingBridgeStatus.PortBusy;
+            }
+        }
+
+        private static void MaybeLogAutoStartBusyWarning(ExistingBridgeStatus status)
+        {
+            var now = EditorApplication.timeSinceStartup;
+            if (now - _lastPortBusyWarningTime < 30.0d)
+            {
+                return;
+            }
+
+            _lastPortBusyWarningTime = now;
+            if (status == ExistingBridgeStatus.PortBusy)
+            {
+                Debug.LogWarning($"{ProductName} auto-start skipped because port {_port} is busy. Will retry automatically.");
+            }
         }
 
         private static void HandleContext(HttpListenerContext context)
@@ -4238,6 +4289,13 @@ namespace CodexUnityMcp
             public string Type { get; set; }
             public string Message { get; set; }
             public string StackTrace { get; set; }
+        }
+
+        private enum ExistingBridgeStatus
+        {
+            Unknown,
+            Reachable,
+            PortBusy
         }
 
         private sealed class TestRunState
