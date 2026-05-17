@@ -1,5 +1,7 @@
 # Codex Unity MCP
 
+![UnityMCP Hero](docs/images/unitymcp-hero.png)
+
 ![Status](https://img.shields.io/badge/status-early_alpha-orange)
 ![Unity](https://img.shields.io/badge/Unity-2021.3%2B-black)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
@@ -22,6 +24,8 @@ screenshots, and verify changes inside a live Unity project.
 Codex stops guessing blindly and gets a real Unity feedback loop:
 
 `inspect -> change -> verify -> recover`
+
+![Workflow Comparison](docs/images/workflow-comparison.png)
 
 ## Architecture
 
