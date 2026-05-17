@@ -1,4 +1,4 @@
-"""Codex Unity MCP server package."""
+"""Unity MCP server package."""
 
 __all__ = ["__version__"]
 

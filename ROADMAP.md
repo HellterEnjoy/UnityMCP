@@ -1,7 +1,7 @@
-# Codex Unity MCP Roadmap
+# Unity MCP Roadmap
 
 This roadmap is intentionally practical. The goal is not to chase feature count. The goal is to
-turn the repository into a reliable Unity automation layer for Codex:
+turn the repository into a reliable Unity automation layer for MCP-compatible AI clients:
 
 - safe scene editing
 - semi-realtime gameplay testing
@@ -53,7 +53,7 @@ Already implemented:
 
 ## Phase 3: Editor Ergonomics
 
-This is the next development block. It should make the editor itself easier for Codex to drive.
+This is the next development block. It should make the editor itself easier for an MCP client to drive.
 
 Planned work:
 

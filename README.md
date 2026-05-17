@@ -1,4 +1,4 @@
-# Codex Unity MCP
+# Unity MCP
 
 ![UnityMCP Hero](docs/images/unitymcp-hero.png)
 
@@ -7,8 +7,8 @@
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-custom-lightgrey)
 
-Unity automation bridge for Codex: inspect scenes, edit safely, run Play Mode checks, take
-screenshots, and verify changes inside a live Unity project.
+Unity automation bridge for MCP-compatible AI clients: inspect scenes, edit safely, run Play
+Mode checks, take screenshots, and verify changes inside a live Unity project.
 
 ## What It Does
 
@@ -21,7 +21,7 @@ screenshots, and verify changes inside a live Unity project.
 
 ## Why It Matters
 
-Codex stops guessing blindly and gets a real Unity feedback loop:
+Your MCP client stops guessing blindly and gets a real Unity feedback loop:
 
 `inspect -> change -> verify -> recover`
 
@@ -29,7 +29,7 @@ Codex stops guessing blindly and gets a real Unity feedback loop:
 
 ## Architecture
 
-`Codex -> Python MCP Server -> Local Unity HTTP Bridge -> Unity Editor`
+`MCP Client -> Python MCP Server -> Local Unity HTTP Bridge -> Unity Editor`
 
 ## Quick Install
 
@@ -39,11 +39,22 @@ Codex stops guessing blindly and gets a real Unity feedback loop:
 https://github.com/HellterEnjoy/UnityMCP.git?path=/unity-package/Packages/com.codex.unity-mcp#main
 ```
 
-### Codex MCP Server
+### MCP Server Setup
+
+```powershell
+.\scripts\setup-unity-mcp-server.ps1
+```
+
+This prepares `server\.venv` and installs the MCP server for any client that can launch a local
+command-based MCP process.
+
+### Codex Helper
 
 ```powershell
 .\scripts\install-codex-mcp.ps1
 ```
+
+This keeps the Codex setup path one-command simple while the server itself stays client-agnostic.
 
 ## Project Status
 
@@ -55,7 +66,7 @@ Useful already, but the API and workflows may still change before `1.0`.
 
 - Unity `2021.3+`
 - Python `3.10+`
-- Codex CLI / Codex app with MCP support
+- Any MCP-compatible client that can launch a local command-based server
 - Windows PowerShell for the provided install script
 
 ## Security Warning
@@ -81,10 +92,11 @@ restrictions.
 - Semi-realtime gameplay testing loop
 - Runtime field reads and writes during Play Mode
 - Editor ergonomics tools for focus, selection, screenshots, console checkpoints, and session restore
+- Works with Codex today and is structured to plug into other MCP clients without changing Unity-side tooling
 
 ## Known Limitations
 
 - only supports a localhost bridge by default
 - not a real-time video stream
-- tested mainly on Windows with Codex-driven workflows
+- tested mainly on Windows and currently exercised most heavily through Codex
 - Unity editor APIs and MCP tool shapes may still change before `1.0`

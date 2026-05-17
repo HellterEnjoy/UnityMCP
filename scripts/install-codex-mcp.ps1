@@ -3,37 +3,17 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent $ScriptDir
 $ServerDir = Join-Path $RepoRoot "server"
-$VenvDir = Join-Path $ServerDir ".venv"
 $VenvPython = Join-Path $ServerDir ".venv\Scripts\python.exe"
-
-function Invoke-Checked {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string] $FilePath,
-
-        [Parameter(Mandatory = $true)]
-        [string[]] $Arguments
-    )
-
-    & $FilePath @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "$FilePath failed with exit code $LASTEXITCODE"
-    }
-}
 
 if (-not (Get-Command codex -ErrorAction SilentlyContinue)) {
     throw "Codex CLI was not found in PATH. Install or launch Codex first, then rerun this script."
 }
 
-if (-not (Test-Path $VenvPython)) {
-    Invoke-Checked -FilePath "python" -Arguments @("-m", "venv", $VenvDir)
-}
-
-Invoke-Checked -FilePath $VenvPython -Arguments @("-m", "pip", "install", "-e", $ServerDir)
+. (Join-Path $ScriptDir "setup-unity-mcp-server.ps1")
 
 codex mcp remove codex-unity 2>$null | Out-Null
 
-Invoke-Checked -FilePath "codex" -Arguments @(
+& "codex" @(
     "mcp",
     "add",
     "codex-unity",
@@ -44,5 +24,11 @@ Invoke-Checked -FilePath "codex" -Arguments @(
     "-m",
     "codex_unity_mcp.server"
 )
+if ($LASTEXITCODE -ne 0) {
+    throw "codex mcp add failed with exit code $LASTEXITCODE"
+}
 
-Invoke-Checked -FilePath "codex" -Arguments @("mcp", "get", "codex-unity")
+& "codex" @("mcp", "get", "codex-unity")
+if ($LASTEXITCODE -ne 0) {
+    throw "codex mcp get failed with exit code $LASTEXITCODE"
+}

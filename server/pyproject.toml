@@ -3,15 +3,16 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "codex-unity-mcp"
+name = "unity-mcp"
 version = "0.1.0"
-description = "MCP server that exposes a local Unity Editor scene bridge to Codex."
+description = "MCP server that exposes a local Unity Editor bridge to MCP-compatible AI clients."
 requires-python = ">=3.10"
 dependencies = [
   "mcp>=1.9.0"
 ]
 
 [project.scripts]
+unity-mcp-server = "codex_unity_mcp.server:main"
 codex-unity-mcp = "codex_unity_mcp.server:main"
 
 [tool.setuptools.packages.find]

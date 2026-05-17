@@ -1,0 +1,4 @@
+command: <repo>\server\.venv\Scripts\python.exe
+args: -m codex_unity_mcp.server
+env:
+  UNITY_MCP_BRIDGE_URL: http://127.0.0.1:8765

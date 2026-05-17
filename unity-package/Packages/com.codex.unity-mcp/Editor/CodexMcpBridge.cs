@@ -27,7 +27,12 @@ namespace CodexUnityMcp
     {
         private const int DefaultPort = 8765;
         private const string PrefixHost = "127.0.0.1";
+        private const string ProductName = "Unity MCP";
+        private const string PackageName = "com.codex.unity-mcp";
         private const string GitPackageUrl = "https://github.com/HellterEnjoy/UnityMCP.git?path=/unity-package/Packages/com.codex.unity-mcp#main";
+        private const string RepositoryUrl = "https://github.com/HellterEnjoy/UnityMCP";
+        private const string WindowMenuRoot = "Window/Unity MCP";
+        private const string ToolsMenuRoot = "Tools/Unity MCP";
         private const int MaxRecentLogs = 256;
         private static readonly ConcurrentQueue<BridgeRequest> Requests = new ConcurrentQueue<BridgeRequest>();
         private static readonly Dictionary<string, SceneSnapshot> Snapshots = new Dictionary<string, SceneSnapshot>(StringComparer.OrdinalIgnoreCase);
@@ -58,7 +63,7 @@ namespace CodexUnityMcp
             EditorApplication.delayCall += StartServer;
         }
 
-        [MenuItem("Window/Codex MCP Bridge/Start")]
+        [MenuItem(WindowMenuRoot + "/Bridge/Start", false, 2100)]
         public static void StartServer()
         {
             if (_running)
@@ -76,21 +81,21 @@ namespace CodexUnityMcp
                 _listenerThread = new Thread(ListenLoop)
                 {
                     IsBackground = true,
-                    Name = "Codex MCP Bridge HTTP"
+                    Name = ProductName + " HTTP"
                 };
                 _listenerThread.Start();
 
-                Debug.Log($"Codex MCP Bridge listening on http://{PrefixHost}:{_port}");
+                Debug.Log($"{ProductName} listening on http://{PrefixHost}:{_port}");
             }
             catch (Exception ex)
             {
                 _running = false;
                 _nextAutoStartTime = EditorApplication.timeSinceStartup + 2.0d;
-                Debug.LogError($"Failed to start Codex MCP Bridge: {ex.Message}");
+                Debug.LogError($"Failed to start {ProductName}: {ex.Message}");
             }
         }
 
-        [MenuItem("Window/Codex MCP Bridge/Stop")]
+        [MenuItem(WindowMenuRoot + "/Bridge/Stop", false, 2101)]
         public static void StopServer()
         {
             _running = false;
@@ -107,29 +112,29 @@ namespace CodexUnityMcp
 
             _listener = null;
             _nextAutoStartTime = EditorApplication.timeSinceStartup + 1.0d;
-            Debug.Log("Codex MCP Bridge stopped");
+            Debug.Log($"{ProductName} stopped");
         }
 
-        [MenuItem("Window/Codex MCP Bridge/Status")]
+        [MenuItem(WindowMenuRoot + "/Bridge/Status", false, 2102)]
         public static void LogStatus()
         {
             Debug.Log(_running
-                ? $"Codex MCP Bridge is running on http://{PrefixHost}:{_port}"
-                : "Codex MCP Bridge is stopped");
+                ? $"{ProductName} is running on http://{PrefixHost}:{_port}"
+                : $"{ProductName} is stopped");
         }
 
-        [MenuItem("Window/Codex MCP Bridge/Update Package From Git")]
+        [MenuItem(WindowMenuRoot + "/Package/Update From Git", false, 2110)]
         public static void UpdatePackageFromGit()
         {
             if (_packageUpdateRequest != null && !_packageUpdateRequest.IsCompleted)
             {
-                Debug.Log("Codex MCP Bridge package update is already running");
+                Debug.Log($"{ProductName} package update is already running");
                 return;
             }
 
             if (!EditorUtility.DisplayDialog(
-                    "Update Codex MCP Bridge",
-                    "This will ask Unity Package Manager to update com.codex.unity-mcp from the GitHub main branch.",
+                    $"Update {ProductName}",
+                    $"This will ask Unity Package Manager to update {PackageName} from the GitHub main branch.",
                     "Update",
                     "Cancel"))
             {
@@ -138,31 +143,44 @@ namespace CodexUnityMcp
 
             _packageUpdateRequest = Client.Add(GitPackageUrl);
             EditorApplication.update += WatchPackageUpdate;
-            Debug.Log($"Updating Codex MCP Bridge package from {GitPackageUrl}");
+            Debug.Log($"Updating {ProductName} package from {GitPackageUrl}");
         }
 
-        [MenuItem("Tools/Codex MCP Bridge/Start")]
+        [MenuItem(ToolsMenuRoot + "/Bridge/Start", false, 1300)]
         private static void StartServerFromToolsMenu()
         {
             StartServer();
         }
 
-        [MenuItem("Tools/Codex MCP Bridge/Stop")]
+        [MenuItem(ToolsMenuRoot + "/Bridge/Stop", false, 1301)]
         private static void StopServerFromToolsMenu()
         {
             StopServer();
         }
 
-        [MenuItem("Tools/Codex MCP Bridge/Status")]
+        [MenuItem(ToolsMenuRoot + "/Bridge/Status", false, 1302)]
         private static void LogStatusFromToolsMenu()
         {
             LogStatus();
         }
 
-        [MenuItem("Tools/Codex MCP Bridge/Update Package From Git")]
+        [MenuItem(ToolsMenuRoot + "/Package/Update From Git", false, 1310)]
         private static void UpdatePackageFromGitToolsMenu()
         {
             UpdatePackageFromGit();
+        }
+
+        [MenuItem(ToolsMenuRoot + "/Package/Open GitHub Repository", false, 1311)]
+        private static void OpenRepositoryFromToolsMenu()
+        {
+            Application.OpenURL(RepositoryUrl);
+        }
+
+        [MenuItem(ToolsMenuRoot + "/Open Screenshots Folder", false, 1320)]
+        private static void OpenScreenshotsFolderFromToolsMenu()
+        {
+            Directory.CreateDirectory(GetScreenshotsDirectory());
+            EditorUtility.RevealInFinder(GetScreenshotsDirectory());
         }
 
         private static void WatchPackageUpdate()
@@ -175,11 +193,11 @@ namespace CodexUnityMcp
             EditorApplication.update -= WatchPackageUpdate;
             if (_packageUpdateRequest.Status == StatusCode.Success)
             {
-                Debug.Log($"Codex MCP Bridge package updated: {_packageUpdateRequest.Result.packageId}");
+                Debug.Log($"{ProductName} package updated: {_packageUpdateRequest.Result.packageId}");
             }
             else
             {
-                Debug.LogError($"Failed to update Codex MCP Bridge package: {_packageUpdateRequest.Error.message}");
+                Debug.LogError($"Failed to update {ProductName} package: {_packageUpdateRequest.Error.message}");
             }
 
             _packageUpdateRequest = null;
@@ -229,7 +247,7 @@ namespace CodexUnityMcp
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogWarning($"Codex MCP Bridge listener error: {ex.Message}");
+                    Debug.LogWarning($"{ProductName} listener error: {ex.Message}");
                 }
             }
         }
@@ -257,7 +275,7 @@ namespace CodexUnityMcp
                     WriteJson(context.Response, new Dictionary<string, object>
                     {
                         { "ok", true },
-                        { "bridge", "codex-unity-mcp" },
+                        { "bridge", "unity-mcp" },
                         { "port", _port },
                         { "timeUtc", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) }
                     });
@@ -629,7 +647,7 @@ namespace CodexUnityMcp
                 return Fail("not_found", "GameObject not found");
             }
 
-            Undo.RecordObject(go.transform, "Codex MCP Set Transform");
+            Undo.RecordObject(go.transform, "Unity MCP Set Transform");
 
             if (TryVector3(query, "position", out var position))
             {
@@ -677,11 +695,11 @@ namespace CodexUnityMcp
                 return Fail("invalid_primitive_type", "primitiveType must be one of empty, cube, sphere, capsule, cylinder, plane, or quad");
             }
 
-            Undo.RegisterCreatedObjectUndo(go, "Codex MCP Create GameObject");
+            Undo.RegisterCreatedObjectUndo(go, "Unity MCP Create GameObject");
 
             if (parent != null)
             {
-                Undo.SetTransformParent(go.transform, parent.transform, "Codex MCP Set Parent");
+                Undo.SetTransformParent(go.transform, parent.transform, "Unity MCP Set Parent");
             }
 
             ApplyOptionalTransform(go, query);
@@ -730,15 +748,15 @@ namespace CodexUnityMcp
 
             var duplicate = Object.Instantiate(source);
             duplicate.name = Get(query, "newName", $"{source.name} Copy");
-            Undo.RegisterCreatedObjectUndo(duplicate, "Codex MCP Duplicate GameObject");
+            Undo.RegisterCreatedObjectUndo(duplicate, "Unity MCP Duplicate GameObject");
 
             if (parent != null)
             {
-                Undo.SetTransformParent(duplicate.transform, parent.transform, "Codex MCP Set Parent");
+                Undo.SetTransformParent(duplicate.transform, parent.transform, "Unity MCP Set Parent");
             }
             else if (source.transform.parent != null)
             {
-                Undo.SetTransformParent(duplicate.transform, source.transform.parent, "Codex MCP Set Parent");
+                Undo.SetTransformParent(duplicate.transform, source.transform.parent, "Unity MCP Set Parent");
             }
 
             ApplyOptionalTransform(duplicate, query);
@@ -910,7 +928,7 @@ namespace CodexUnityMcp
             }
 
             var rollbackOnError = Bool(query, "rollbackOnError", true);
-            var label = Get(query, "label", "Codex MCP Safe Batch");
+            var label = Get(query, "label", "Unity MCP Safe Batch");
             var before = CaptureSceneSnapshot("before");
             Undo.IncrementCurrentGroup();
             var undoGroup = Undo.GetCurrentGroup();
@@ -1149,7 +1167,7 @@ namespace CodexUnityMcp
             }
 
             var serialized = property.serializedObject;
-            Undo.RecordObject(component, "Codex MCP Set Component Field");
+            Undo.RecordObject(component, "Unity MCP Set Component Field");
             if (!TryAssignSerializedProperty(property, parsedValue, out error))
             {
                 return Fail("unsupported_property_write", error);
@@ -1874,7 +1892,7 @@ namespace CodexUnityMcp
                 var bytes = texture.EncodeToPNG();
                 Object.DestroyImmediate(texture);
 
-                var dir = Path.Combine(Application.dataPath, "..", "Library", "CodexMcp", "Screenshots");
+                var dir = GetScreenshotsDirectory();
                 Directory.CreateDirectory(dir);
                 var fileName = $"screenshot_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.png";
                 var filePath = Path.GetFullPath(Path.Combine(dir, fileName));
@@ -2015,7 +2033,7 @@ namespace CodexUnityMcp
 
         private static Dictionary<string, object> SaveScreenshotPayload(byte[] bytes, string prefix, int width, int height, bool includeImage)
         {
-            var dir = Path.Combine(Application.dataPath, "..", "Library", "CodexMcp", "Screenshots");
+            var dir = GetScreenshotsDirectory();
             Directory.CreateDirectory(dir);
             var fileName = $"{prefix}_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.png";
             var filePath = Path.GetFullPath(Path.Combine(dir, fileName));
@@ -2034,6 +2052,11 @@ namespace CodexUnityMcp
             }
 
             return payload;
+        }
+
+        private static string GetScreenshotsDirectory()
+        {
+            return Path.Combine(Application.dataPath, "..", "Library", "UnityMcp", "Screenshots");
         }
 
         private static Dictionary<string, object> GameObjectDetails(GameObject go, bool includeProperties)

@@ -4,7 +4,7 @@
 
 Safe Edit Mode is the current project-specific differentiator.
 
-Instead of firing unrelated scene-edit commands one by one, Codex can:
+Instead of firing unrelated scene-edit commands one by one, an MCP client can:
 
 1. capture a snapshot
 2. apply a batch of changes

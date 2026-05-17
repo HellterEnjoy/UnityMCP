@@ -1,14 +1,15 @@
 {
   "name": "com.codex.unity-mcp",
   "version": "0.1.0",
-  "displayName": "Codex Unity MCP Bridge",
-  "description": "Local Unity Editor bridge for Codex MCP tools.",
+  "displayName": "Unity MCP Bridge",
+  "description": "Local Unity Editor bridge for MCP-compatible AI clients.",
   "unity": "2021.3",
   "keywords": [
-    "codex",
+    "unity",
     "mcp",
     "editor",
-    "automation"
+    "automation",
+    "agent"
   ],
   "repository": {
     "type": "git",

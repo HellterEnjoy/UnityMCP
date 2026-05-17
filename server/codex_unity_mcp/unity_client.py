@@ -44,7 +44,7 @@ class UnityClient:
         except urllib.error.URLError as exc:
             raise UnityBridgeError(
                 f"Cannot reach Unity bridge at {self.base_url}. "
-                "Open Unity and start Tools > Codex MCP Bridge > Start."
+                "Open Unity and start Tools > Unity MCP > Bridge > Start."
             ) from exc
 
         try:

@@ -9,7 +9,7 @@ from mcp.server.fastmcp import FastMCP
 from .unity_client import UnityBridgeError, UnityClient
 
 
-mcp = FastMCP("codex-unity-mcp")
+mcp = FastMCP("unity-mcp")
 client = UnityClient()
 
 
@@ -407,7 +407,7 @@ def diff_scene(before_snapshot_id: str, after_snapshot_id: str | None = None) ->
 def safe_batch(
     commands: list[dict[str, Any]],
     rollback_on_error: bool = True,
-    label: str = "Codex MCP Safe Batch",
+    label: str = "Unity MCP Safe Batch",
 ) -> str:
     """Run a batch of scene-edit commands in one Unity Undo group with optional rollback.
 

@@ -18,7 +18,7 @@
 
 - `snapshot_scene(snapshot_id=None)`
 - `diff_scene(before_snapshot_id, after_snapshot_id=None)`
-- `safe_batch(commands, rollback_on_error=True, label="Codex MCP Safe Batch")`
+- `safe_batch(commands, rollback_on_error=True, label="Unity MCP Safe Batch")`
 
 ## Gameplay And Runtime
 
