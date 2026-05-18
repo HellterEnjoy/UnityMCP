@@ -16,6 +16,15 @@ using UnityEditor.SceneManagement;
 using UnityEditor.TestTools.TestRunner.Api;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+#if ENABLE_INPUT_SYSTEM
+using InputKey = UnityEngine.InputSystem.Key;
+using InputKeyboard = UnityEngine.InputSystem.Keyboard;
+using InputMouse = UnityEngine.InputSystem.Mouse;
+using InputSystemApi = UnityEngine.InputSystem.InputSystem;
+using InputKeyboardState = UnityEngine.InputSystem.LowLevel.KeyboardState;
+using InputMouseButton = UnityEngine.InputSystem.LowLevel.MouseButton;
+using InputMouseState = UnityEngine.InputSystem.LowLevel.MouseState;
+#endif
 using Object = UnityEngine.Object;
 
 #pragma warning disable 0618
@@ -41,6 +50,11 @@ namespace CodexUnityMcp
         private static readonly object RecentLogsLock = new object();
         private static readonly List<RuntimeLogEntry> RecentLogs = new List<RuntimeLogEntry>();
         private static readonly object TestRunLock = new object();
+#if ENABLE_INPUT_SYSTEM
+        private static readonly HashSet<InputKey> PressedInputKeys = new HashSet<InputKey>();
+        private static readonly HashSet<int> PressedMouseButtons = new HashSet<int>();
+        private static Vector2 _lastInjectedMousePosition;
+#endif
 
         private static HttpListener _listener;
         private static Thread _listenerThread;
@@ -1396,8 +1410,13 @@ namespace CodexUnityMcp
                 return Fail("game_view_unavailable", error);
             }
 
+            var inputSystemInjected = false;
+            string inputSystemError = null;
+            string inputSystemKey = null;
+
             try
             {
+                inputSystemInjected = TryInjectKeyboardIntoInputSystem(keyCode, eventType, out inputSystemKey, out inputSystemError);
                 switch (eventType)
                 {
                     case "down":
@@ -1421,6 +1440,9 @@ namespace CodexUnityMcp
             {
                 { "key", keyCode.ToString() },
                 { "eventType", eventType },
+                { "inputSystemInjected", inputSystemInjected },
+                { "inputSystemKey", inputSystemKey },
+                { "inputSystemError", inputSystemError },
                 { "gameView", EditorWindowPayload(gameView, "game") }
             });
         }
@@ -1442,9 +1464,13 @@ namespace CodexUnityMcp
             var button = Int(query, "button", 0);
             var eventType = Get(query, "eventType", "click").Trim().ToLowerInvariant();
             var guiPoint = ScreenToGameViewPoint(gameView, new Vector2(x, y));
+            var screenPoint = new Vector2(x, y);
+            var inputSystemInjected = false;
+            string inputSystemError = null;
 
             try
             {
+                inputSystemInjected = TryInjectMouseIntoInputSystem(screenPoint, button, eventType, out inputSystemError);
                 switch (eventType)
                 {
                     case "move":
@@ -1474,6 +1500,8 @@ namespace CodexUnityMcp
             {
                 { "eventType", eventType },
                 { "button", button },
+                { "inputSystemInjected", inputSystemInjected },
+                { "inputSystemError", inputSystemError },
                 { "screenPosition", Vec2(new Vector2(x, y)) },
                 { "gameViewPosition", Vec2(guiPoint) },
                 { "gameView", EditorWindowPayload(gameView, "game") }
@@ -4207,6 +4235,272 @@ namespace CodexUnityMcp
             gameView.SendEvent(evt);
             gameView.Repaint();
         }
+
+        private static bool TryInjectKeyboardIntoInputSystem(KeyCode keyCode, string eventType, out string inputSystemKey, out string error)
+        {
+            inputSystemKey = null;
+#if ENABLE_INPUT_SYSTEM
+            error = null;
+
+            if (!EditorApplication.isPlaying)
+            {
+                error = "Input System keyboard injection requires Play Mode";
+                return false;
+            }
+
+            if (InputKeyboard.current == null)
+            {
+                error = "Input System keyboard device is not available";
+                return false;
+            }
+
+            if (!TryMapKeyCodeToInputKey(keyCode, out var mappedKey))
+            {
+                error = $"KeyCode '{keyCode}' is not mapped to Unity Input System Key";
+                return false;
+            }
+
+            switch (eventType)
+            {
+                case "down":
+                    PressedInputKeys.Add(mappedKey);
+                    QueueKeyboardState();
+                    break;
+                case "up":
+                    PressedInputKeys.Remove(mappedKey);
+                    QueueKeyboardState();
+                    break;
+                default:
+                    PressedInputKeys.Add(mappedKey);
+                    QueueKeyboardState();
+                    PressedInputKeys.Remove(mappedKey);
+                    QueueKeyboardState();
+                    break;
+            }
+
+            inputSystemKey = mappedKey.ToString();
+            return true;
+#else
+            error = "Unity Input System support is not enabled in this project";
+            return false;
+#endif
+        }
+
+        private static bool TryInjectMouseIntoInputSystem(Vector2 screenPoint, int button, string eventType, out string error)
+        {
+#if ENABLE_INPUT_SYSTEM
+            error = null;
+
+            if (!EditorApplication.isPlaying)
+            {
+                error = "Input System mouse injection requires Play Mode";
+                return false;
+            }
+
+            if (InputMouse.current == null)
+            {
+                error = "Input System mouse device is not available";
+                return false;
+            }
+
+            switch (eventType)
+            {
+                case "move":
+                    QueueMouseState(screenPoint, null, null, 0);
+                    break;
+                case "down":
+                    QueueMouseState(screenPoint, button, true, 1);
+                    break;
+                case "up":
+                    QueueMouseState(screenPoint, button, false, 1);
+                    break;
+                default:
+                    QueueMouseState(screenPoint, null, null, 0);
+                    QueueMouseState(screenPoint, button, true, 1);
+                    QueueMouseState(screenPoint, button, false, 1);
+                    break;
+            }
+
+            return true;
+#else
+            error = "Unity Input System support is not enabled in this project";
+            return false;
+#endif
+        }
+
+#if ENABLE_INPUT_SYSTEM
+        private static void QueueKeyboardState()
+        {
+            var state = new InputKeyboardState();
+            foreach (var pressedKey in PressedInputKeys)
+            {
+                state.Press(pressedKey);
+            }
+
+            InputSystemApi.QueueStateEvent(InputKeyboard.current, state);
+            EditorApplication.QueuePlayerLoopUpdate();
+        }
+
+        private static void QueueMouseState(Vector2 screenPoint, int? button, bool? pressed, int clickCount)
+        {
+            if (button.HasValue && pressed.HasValue)
+            {
+                if (pressed.Value)
+                {
+                    PressedMouseButtons.Add(button.Value);
+                }
+                else
+                {
+                    PressedMouseButtons.Remove(button.Value);
+                }
+            }
+
+            var delta = screenPoint - _lastInjectedMousePosition;
+            _lastInjectedMousePosition = screenPoint;
+
+            var state = new InputMouseState
+            {
+                position = screenPoint,
+                delta = delta,
+                clickCount = (ushort)Mathf.Clamp(clickCount, 0, ushort.MaxValue)
+            };
+
+            foreach (var pressedButton in PressedMouseButtons)
+            {
+                if (TryMapMouseButton(pressedButton, out var mappedButton))
+                {
+                    state = state.WithButton(mappedButton, true);
+                }
+            }
+
+            InputSystemApi.QueueStateEvent(InputMouse.current, state);
+            EditorApplication.QueuePlayerLoopUpdate();
+        }
+
+        private static bool TryMapMouseButton(int button, out InputMouseButton mappedButton)
+        {
+            switch (button)
+            {
+                case 0:
+                    mappedButton = InputMouseButton.Left;
+                    return true;
+                case 1:
+                    mappedButton = InputMouseButton.Right;
+                    return true;
+                case 2:
+                    mappedButton = InputMouseButton.Middle;
+                    return true;
+                case 3:
+                    mappedButton = InputMouseButton.Forward;
+                    return true;
+                case 4:
+                    mappedButton = InputMouseButton.Back;
+                    return true;
+                default:
+                    mappedButton = InputMouseButton.Left;
+                    return false;
+            }
+        }
+
+        private static bool TryMapKeyCodeToInputKey(KeyCode keyCode, out InputKey mappedKey)
+        {
+            if (Enum.TryParse(keyCode.ToString(), true, out mappedKey))
+            {
+                return true;
+            }
+
+            switch (keyCode)
+            {
+                case KeyCode.Alpha0:
+                    mappedKey = InputKey.Digit0;
+                    return true;
+                case KeyCode.Alpha1:
+                    mappedKey = InputKey.Digit1;
+                    return true;
+                case KeyCode.Alpha2:
+                    mappedKey = InputKey.Digit2;
+                    return true;
+                case KeyCode.Alpha3:
+                    mappedKey = InputKey.Digit3;
+                    return true;
+                case KeyCode.Alpha4:
+                    mappedKey = InputKey.Digit4;
+                    return true;
+                case KeyCode.Alpha5:
+                    mappedKey = InputKey.Digit5;
+                    return true;
+                case KeyCode.Alpha6:
+                    mappedKey = InputKey.Digit6;
+                    return true;
+                case KeyCode.Alpha7:
+                    mappedKey = InputKey.Digit7;
+                    return true;
+                case KeyCode.Alpha8:
+                    mappedKey = InputKey.Digit8;
+                    return true;
+                case KeyCode.Alpha9:
+                    mappedKey = InputKey.Digit9;
+                    return true;
+                case KeyCode.Return:
+                    mappedKey = InputKey.Enter;
+                    return true;
+                case KeyCode.KeypadEnter:
+                    mappedKey = InputKey.NumpadEnter;
+                    return true;
+                case KeyCode.LeftControl:
+                    mappedKey = InputKey.LeftCtrl;
+                    return true;
+                case KeyCode.RightControl:
+                    mappedKey = InputKey.RightCtrl;
+                    return true;
+                case KeyCode.LeftAlt:
+                    mappedKey = InputKey.LeftAlt;
+                    return true;
+                case KeyCode.RightAlt:
+                    mappedKey = InputKey.RightAlt;
+                    return true;
+                case KeyCode.LeftShift:
+                    mappedKey = InputKey.LeftShift;
+                    return true;
+                case KeyCode.RightShift:
+                    mappedKey = InputKey.RightShift;
+                    return true;
+                case KeyCode.BackQuote:
+                    mappedKey = InputKey.Backquote;
+                    return true;
+                case KeyCode.Escape:
+                    mappedKey = InputKey.Escape;
+                    return true;
+                case KeyCode.Space:
+                    mappedKey = InputKey.Space;
+                    return true;
+                case KeyCode.UpArrow:
+                    mappedKey = InputKey.UpArrow;
+                    return true;
+                case KeyCode.DownArrow:
+                    mappedKey = InputKey.DownArrow;
+                    return true;
+                case KeyCode.LeftArrow:
+                    mappedKey = InputKey.LeftArrow;
+                    return true;
+                case KeyCode.RightArrow:
+                    mappedKey = InputKey.RightArrow;
+                    return true;
+                case KeyCode.Backspace:
+                    mappedKey = InputKey.Backspace;
+                    return true;
+                case KeyCode.Delete:
+                    mappedKey = InputKey.Delete;
+                    return true;
+                case KeyCode.Tab:
+                    mappedKey = InputKey.Tab;
+                    return true;
+                default:
+                    mappedKey = default;
+                    return false;
+            }
+        }
+#endif
 
         private static Vector2 ScreenToGameViewPoint(EditorWindow gameView, Vector2 screenPoint)
         {
