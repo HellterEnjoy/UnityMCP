@@ -50,6 +50,7 @@ namespace CodexUnityMcp
         private static TestRunState _currentTestRun;
         private static double _nextAutoStartTime;
         private static double _lastPortBusyWarningTime;
+        private static bool? _pendingPlayModeRequest;
 
         static CodexMcpBridge()
         {
@@ -275,7 +276,47 @@ namespace CodexUnityMcp
 
             if (state == PlayModeStateChange.EnteredEditMode || state == PlayModeStateChange.EnteredPlayMode)
             {
+                _pendingPlayModeRequest = null;
                 _nextAutoStartTime = EditorApplication.timeSinceStartup + 1.0d;
+            }
+        }
+
+        private static void QueuePlayModeRequest(bool enterPlayMode)
+        {
+            _pendingPlayModeRequest = enterPlayMode;
+            EditorApplication.delayCall -= ApplyQueuedPlayModeRequest;
+            EditorApplication.delayCall += ApplyQueuedPlayModeRequest;
+        }
+
+        private static void ApplyQueuedPlayModeRequest()
+        {
+            if (!_pendingPlayModeRequest.HasValue)
+            {
+                return;
+            }
+
+            var target = _pendingPlayModeRequest.Value;
+            try
+            {
+                if (target)
+                {
+                    if (!EditorApplication.isPlaying && !EditorApplication.isPlayingOrWillChangePlaymode)
+                    {
+                        EditorApplication.isPlaying = true;
+                    }
+                }
+                else if (EditorApplication.isPlaying || EditorApplication.isPlayingOrWillChangePlaymode)
+                {
+                    EditorApplication.isPlaying = false;
+                }
+            }
+            finally
+            {
+                if ((target && !EditorApplication.isPlayingOrWillChangePlaymode) ||
+                    (!target && !EditorApplication.isPlaying && !EditorApplication.isPlayingOrWillChangePlaymode))
+                {
+                    _pendingPlayModeRequest = null;
+                }
             }
         }
 
@@ -1118,23 +1159,23 @@ namespace CodexUnityMcp
 
         private static Dictionary<string, object> EnterPlayMode(Dictionary<string, string> query)
         {
-            if (EditorApplication.isPlaying)
+            if (EditorApplication.isPlaying || EditorApplication.isPlayingOrWillChangePlaymode || _pendingPlayModeRequest == true)
             {
                 return Ok(PlayStatePayload(false));
             }
 
-            EditorApplication.isPlaying = true;
+            QueuePlayModeRequest(true);
             return Ok(PlayStatePayload(true));
         }
 
         private static Dictionary<string, object> ExitPlayMode(Dictionary<string, string> query)
         {
-            if (!EditorApplication.isPlaying && !EditorApplication.isPlayingOrWillChangePlaymode)
+            if ((!EditorApplication.isPlaying && !EditorApplication.isPlayingOrWillChangePlaymode) || _pendingPlayModeRequest == false)
             {
                 return Ok(PlayStatePayload(false));
             }
 
-            EditorApplication.isPlaying = false;
+            QueuePlayModeRequest(false);
             return Ok(PlayStatePayload(true));
         }
 
@@ -1150,7 +1191,8 @@ namespace CodexUnityMcp
                 { "requestedChange", requestedChange },
                 { "isPlaying", EditorApplication.isPlaying },
                 { "isPaused", EditorApplication.isPaused },
-                { "isPlayingOrWillChangePlaymode", EditorApplication.isPlayingOrWillChangePlaymode }
+                { "isPlayingOrWillChangePlaymode", EditorApplication.isPlayingOrWillChangePlaymode },
+                { "pendingRequest", _pendingPlayModeRequest.HasValue ? (_pendingPlayModeRequest.Value ? "enter" : "exit") : string.Empty }
             };
         }
 
@@ -1349,40 +1391,45 @@ namespace CodexUnityMcp
 
             var eventType = Get(query, "eventType", "press").Trim().ToLowerInvariant();
             var character = Get(query, "character", string.Empty);
-            var gameView = GetGameViewWindow();
-            if (gameView == null)
+            if (!TryPrepareGameViewForInput(out var gameView, out var error))
             {
-                return Fail("game_view_unavailable", "Unity Game view is not available");
+                return Fail("game_view_unavailable", error);
             }
 
-            FocusWindow(gameView);
-            switch (eventType)
+            try
             {
-                case "down":
-                    SendGameViewEvent(gameView, BuildKeyEvent(EventType.KeyDown, keyCode, character));
-                    break;
-                case "up":
-                    SendGameViewEvent(gameView, BuildKeyEvent(EventType.KeyUp, keyCode, character));
-                    break;
-                default:
-                    SendGameViewEvent(gameView, BuildKeyEvent(EventType.KeyDown, keyCode, character));
-                    SendGameViewEvent(gameView, BuildKeyEvent(EventType.KeyUp, keyCode, character));
-                    break;
+                switch (eventType)
+                {
+                    case "down":
+                        SendGameViewEvent(gameView, BuildKeyEvent(EventType.KeyDown, keyCode, character));
+                        break;
+                    case "up":
+                        SendGameViewEvent(gameView, BuildKeyEvent(EventType.KeyUp, keyCode, character));
+                        break;
+                    default:
+                        SendGameViewEvent(gameView, BuildKeyEvent(EventType.KeyDown, keyCode, character));
+                        SendGameViewEvent(gameView, BuildKeyEvent(EventType.KeyUp, keyCode, character));
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                return Fail("game_view_input_error", ex.Message);
             }
 
             return Ok(new Dictionary<string, object>
             {
                 { "key", keyCode.ToString() },
-                { "eventType", eventType }
+                { "eventType", eventType },
+                { "gameView", EditorWindowPayload(gameView, "game") }
             });
         }
 
         private static Dictionary<string, object> SendMouseInput(Dictionary<string, string> query)
         {
-            var gameView = GetGameViewWindow();
-            if (gameView == null)
+            if (!TryPrepareGameViewForInput(out var gameView, out var error))
             {
-                return Fail("game_view_unavailable", "Unity Game view is not available");
+                return Fail("game_view_unavailable", error);
             }
 
             var x = Float(query, "x", float.NaN);
@@ -1396,22 +1443,31 @@ namespace CodexUnityMcp
             var eventType = Get(query, "eventType", "click").Trim().ToLowerInvariant();
             var guiPoint = ScreenToGameViewPoint(gameView, new Vector2(x, y));
 
-            FocusWindow(gameView);
-            switch (eventType)
+            try
             {
-                case "move":
-                    SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseMove, guiPoint, button));
-                    break;
-                case "down":
-                    SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseDown, guiPoint, button));
-                    break;
-                case "up":
-                    SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseUp, guiPoint, button));
-                    break;
-                default:
-                    SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseDown, guiPoint, button));
-                    SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseUp, guiPoint, button));
-                    break;
+                switch (eventType)
+                {
+                    case "move":
+                        SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseMove, guiPoint, button));
+                        break;
+                    case "down":
+                        SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseMove, guiPoint, button));
+                        SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseDown, guiPoint, button));
+                        break;
+                    case "up":
+                        SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseMove, guiPoint, button));
+                        SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseUp, guiPoint, button));
+                        break;
+                    default:
+                        SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseMove, guiPoint, button));
+                        SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseDown, guiPoint, button));
+                        SendGameViewEvent(gameView, BuildMouseEvent(EventType.MouseUp, guiPoint, button));
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                return Fail("game_view_input_error", ex.Message);
             }
 
             return Ok(new Dictionary<string, object>
@@ -1419,7 +1475,8 @@ namespace CodexUnityMcp
                 { "eventType", eventType },
                 { "button", button },
                 { "screenPosition", Vec2(new Vector2(x, y)) },
-                { "gameViewPosition", Vec2(guiPoint) }
+                { "gameViewPosition", Vec2(guiPoint) },
+                { "gameView", EditorWindowPayload(gameView, "game") }
             });
         }
 
@@ -4074,6 +4131,23 @@ namespace CodexUnityMcp
             window.Show();
             window.Focus();
             window.Repaint();
+        }
+
+        private static bool TryPrepareGameViewForInput(out EditorWindow gameView, out string error)
+        {
+            gameView = ResolveOrOpenEditorWindow("game");
+            error = null;
+            if (gameView == null)
+            {
+                error = "Unity Game view is not available";
+                return false;
+            }
+
+            FocusWindow(gameView);
+            InternalEditorUtilityRepaintAllViews();
+            EditorApplication.QueuePlayerLoopUpdate();
+            FocusWindow(gameView);
+            return true;
         }
 
         private static Dictionary<string, object> EditorWindowPayload(EditorWindow window, string target)
